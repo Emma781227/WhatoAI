@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -10,14 +12,20 @@ import {
   type AiStructuredOutput,
   type AiToolResult,
 } from '@whauto/ai';
-import { type AiRealtimeEvent, SOCKET_EVENTS } from '@whauto/shared';
+import { isCustomerServiceWindowOpen, type AiRealtimeEvent, SOCKET_EVENTS } from '@whauto/shared';
 import type { AiMode } from '@whauto/database';
 
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  evaluateAutoReplyGate,
+  type AutoReplySuppressionReason,
+} from './ai-auto-reply-policy';
 import { AiContextService, type AiGenerationContext } from './ai-context.service';
+import { AiOutboundSenderService } from './ai-outbound-sender.service';
 import { AiProviderFactory } from './ai-provider.factory';
 import { AiRealtimeEmitter } from './ai-realtime-emitter.service';
 import { resolveEffectiveAiMode } from './ai-trigger.service';
+import { computeOpenState, type OpeningRange } from './tools/opening-hours';
 import { aiToolDefinitions } from './tools/tool-registry';
 import { AiToolExecutor } from './tools/tool-executor';
 import type { AiToolContext } from './tools/tool-types';
@@ -41,7 +49,7 @@ interface UsageAccumulator {
 }
 
 type Decision =
-  | { kind: 'SUGGESTION'; content: string }
+  | { kind: 'SUGGESTION'; content: string; confidence: number }
   | { kind: 'HANDOFF'; reason: string }
   | { kind: 'NO_REPLY' }
   | { kind: 'INVALID' };
@@ -67,6 +75,7 @@ export class AiOrchestratorService {
     private readonly providerFactory: AiProviderFactory,
     private readonly toolExecutor: AiToolExecutor,
     private readonly realtime: AiRealtimeEmitter,
+    private readonly outboundSender: AiOutboundSenderService,
   ) {}
 
   /**
@@ -175,7 +184,7 @@ export class AiOrchestratorService {
       await this.finalizeFailed(run, resolution.errorCode);
       return;
     }
-    await this.commitDecision(run, context, resolution.decision, usage, loop.finishReason);
+    await this.commitDecision(run, context, resolution.decision, usage, loop.finishReason, loop.usedToolNames);
   }
 
   /** Boucle d'outils STRICTEMENT séquentielle, bornée par toolMaxRounds. */
@@ -190,8 +199,17 @@ export class AiOrchestratorService {
       toolCtx: AiToolContext;
       usage: UsageAccumulator;
     },
-  ): Promise<{ response: AiProviderResponse; toolRounds: number; finishReason: string; roundsExceeded: boolean }> {
+  ): Promise<{
+    response: AiProviderResponse;
+    toolRounds: number;
+    finishReason: string;
+    roundsExceeded: boolean;
+    usedToolNames: string[];
+  }> {
     const tools = aiToolDefinitions();
+    // Noms d'outils réellement appelés — base DÉTERMINISTE de la liste blanche
+    // d'auto-envoi (C2). Ordre d'exécution conservé, doublons possibles.
+    const usedToolNames: string[] = [];
     let response = await provider.generateSuggestion({
       systemPrompt: context.systemPrompt,
       messages: context.messages,
@@ -206,13 +224,14 @@ export class AiOrchestratorService {
     while (response.finishReason === 'TOOL_CALLS' && response.toolCalls.length > 0) {
       // Dépassement : handoff contrôlé, AUCUN appel Gemini supplémentaire.
       if (toolRounds >= opts.toolMaxRounds) {
-        return { response, toolRounds, finishReason: 'TOOL_CALLS', roundsExceeded: true };
+        return { response, toolRounds, finishReason: 'TOOL_CALLS', roundsExceeded: true, usedToolNames };
       }
 
       await this.transitionActive(run.id, 'WAITING_TOOL');
       const toolResults: AiToolResult[] = [];
       // SÉQUENTIEL — jamais en parallèle (ajustement 3).
       for (const call of response.toolCalls) {
+        usedToolNames.push(call.name);
         const outcome = await this.toolExecutor.execute(opts.toolCtx, call.name, call.arguments, {
           round: toolRounds,
           sequence: sequence++,
@@ -234,7 +253,7 @@ export class AiOrchestratorService {
       this.accumulate(opts.usage, response);
     }
 
-    return { response, toolRounds, finishReason: response.finishReason, roundsExceeded: false };
+    return { response, toolRounds, finishReason: response.finishReason, roundsExceeded: false, usedToolNames };
   }
 
   /** Ordre : provider response → parseAiStructuredOutput → evaluateAiOutputSemantics. */
@@ -298,7 +317,7 @@ export class AiOrchestratorService {
     }
     // CONSISTENT.
     if (parsed.action === 'SUGGEST_REPLY') {
-      return { kind: 'SUGGESTION', content: parsed.replyText ?? '' };
+      return { kind: 'SUGGESTION', content: parsed.replyText ?? '', confidence: parsed.confidence };
     }
     if (parsed.action === 'HANDOFF') {
       return { kind: 'HANDOFF', reason: parsed.handoffReason ?? 'AI_HANDOFF' };
@@ -317,6 +336,7 @@ export class AiOrchestratorService {
     decision: Decision,
     usage: UsageAccumulator,
     finalFinishReason: string,
+    usedToolNames: string[],
   ): Promise<void> {
     const outcome = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM conversations WHERE id = ${run.conversationId} FOR UPDATE`;
@@ -347,12 +367,74 @@ export class AiOrchestratorService {
         return { kind: 'SUPERSEDED' as const }; // Changé sous verrou.
       }
 
+      // Mode effectif au moment du commit (env > config Shop) : c'est lui, pas
+      // le mode figé au déclenchement, qui décide de l'auto-envoi.
+      const config = await tx.aiConfiguration.findUnique({
+        where: { shopId: run.shopId },
+        select: {
+          mode: true,
+          autoReplyEnabled: true,
+          autoReplyScheduleMode: true,
+          autoReplyMaxPerConversationPerDay: true,
+          autoReplyAllowedCategories: true,
+        },
+      });
+      const envMode = this.configService.get<AiMode>('AI_MODE') ?? 'SUGGEST_ONLY';
+      const effectiveMode = resolveEffectiveAiMode(envMode, config?.mode ?? null);
+      const autoReplyActive = effectiveMode === 'AUTO_REPLY' && (config?.autoReplyEnabled ?? false);
+
       // Un handoff déjà ouvert (ex. via un outil pendant le run) BLOQUE toute
-      // suggestion (ajustements 9 & 17) : le run réussit sans suggestion.
+      // suggestion ET tout auto-envoi (ajustements 9 & 17) : un humain gère déjà.
       if (decision.kind === 'SUGGESTION') {
         if (obsolete.openHandoffId) {
           return { kind: 'NO_SUGGESTION' as const };
         }
+
+        if (autoReplyActive && config) {
+          const gate = await this.evaluateAutoReplyInTx(tx, run, context, decision, config, usedToolNames);
+          if (gate.action === 'SEND') {
+            const created = await this.outboundSender.createAiOutboundInTx(tx, {
+              organizationId: run.organizationId,
+              aiRunId: run.id,
+              conversation: gate.conversation,
+              text: decision.content,
+              dispatchId: randomUUID(),
+            });
+            await tx.aiRun.update({
+              where: { id: run.id },
+              data: { autoReplyDecision: 'SENT' },
+              select: { id: true },
+            });
+            await this.audit(tx, run, 'AI_AUTO_REPLY_SENT', { messageId: created.messageId });
+            return {
+              kind: 'AUTO_SENT' as const,
+              messageId: created.messageId,
+              outboxEventId: created.outboxEventId,
+            };
+          }
+          // SUPPRIMÉ : repli en suggestion humaine (l'agent garde le brouillon).
+          const suggestion = await tx.aiSuggestion.create({
+            data: {
+              aiRunId: run.id,
+              organizationId: run.organizationId,
+              shopId: run.shopId,
+              conversationId: run.conversationId,
+              content: decision.content,
+              status: 'PENDING',
+              contextLastMessageId: run.contextLastMessageId,
+            },
+            select: { id: true },
+          });
+          await tx.aiRun.update({
+            where: { id: run.id },
+            data: { autoReplyDecision: 'SUPPRESSED', autoReplySuppressionReason: gate.reason },
+            select: { id: true },
+          });
+          await this.audit(tx, run, 'AI_AUTO_REPLY_SUPPRESSED', { reason: gate.reason });
+          return { kind: 'SUGGESTION' as const, suggestionId: suggestion.id };
+        }
+
+        // SUGGEST_ONLY (ou AUTO_REPLY non activé) : comportement inchangé.
         const suggestion = await tx.aiSuggestion.create({
           data: {
             aiRunId: run.id,
@@ -369,7 +451,26 @@ export class AiOrchestratorService {
       }
 
       if (decision.kind === 'HANDOFF') {
+        // Transfert = reprise humaine : la conversation passe HUMAN et
+        // l'auto-réponse est suspendue (jusqu'à une reprise explicite). Sans
+        // effet en SUGGEST_ONLY (aucun auto-envoi), mais sémantiquement correct.
+        await tx.conversation.update({
+          where: { id: run.conversationId },
+          data: { mode: 'HUMAN', aiAutoReplyPaused: true },
+          select: { id: true },
+        });
+        // L'IA a choisi le transfert : en AUTO_REPLY on trace la décision ESCALATED.
+        if (autoReplyActive) {
+          await tx.aiRun.update({
+            where: { id: run.id },
+            data: { autoReplyDecision: 'ESCALATED' },
+            select: { id: true },
+          });
+        }
         if (obsolete.openHandoffId) {
+          if (autoReplyActive) {
+            await this.audit(tx, run, 'AI_AUTO_REPLY_ESCALATED', { handoffId: obsolete.openHandoffId });
+          }
           return { kind: 'HANDOFF' as const, handoffId: obsolete.openHandoffId };
         }
         const handoff = await tx.conversationHandoff.create({
@@ -383,6 +484,9 @@ export class AiOrchestratorService {
           },
           select: { id: true },
         });
+        if (autoReplyActive) {
+          await this.audit(tx, run, 'AI_AUTO_REPLY_ESCALATED', { handoffId: handoff.id });
+        }
         return { kind: 'HANDOFF' as const, handoffId: handoff.id };
       }
 
@@ -394,12 +498,128 @@ export class AiOrchestratorService {
       return;
     }
     this.emit(SOCKET_EVENTS.AI_RUN_COMPLETED, run, { status: 'SUCCEEDED' });
-    if (outcome.kind === 'SUGGESTION') {
+    if (outcome.kind === 'AUTO_SENT') {
+      // Publication BullMQ + message.created/conversation.updated (best-effort).
+      await this.outboundSender.publishAndEmit(run.organizationId, outcome.messageId, outcome.outboxEventId);
+    } else if (outcome.kind === 'SUGGESTION') {
       this.emit(SOCKET_EVENTS.AI_SUGGESTION_CREATED, run, { suggestionId: outcome.suggestionId });
     } else if (outcome.kind === 'HANDOFF') {
       this.emit(SOCKET_EVENTS.AI_HANDOFF_REQUESTED, run, { handoffId: outcome.handoffId });
     }
     this.logger.debug(`Run IA ${run.id} terminé : ${outcome.kind} (finish ${finalFinishReason}).`);
+  }
+
+  /**
+   * Évalue la porte d'auto-envoi (C2) SOUS le verrou de la conversation : lit la
+   * fenêtre 24 h, les horaires (mode hors-ouverture) et les compteurs anti-boucle
+   * DANS la transaction, puis applique la politique déterministe. Renvoie aussi
+   * la conversation (channelId/contactId) nécessaire à la création du message.
+   */
+  private async evaluateAutoReplyInTx(
+    tx: PrismaTx,
+    run: RunRow,
+    context: AiGenerationContext,
+    decision: { kind: 'SUGGESTION'; content: string; confidence: number },
+    config: {
+      autoReplyScheduleMode: 'ALWAYS' | 'OUTSIDE_BUSINESS_HOURS';
+      autoReplyMaxPerConversationPerDay: number;
+      autoReplyAllowedCategories: string[];
+    },
+    usedToolNames: string[],
+  ): Promise<
+    | { action: 'SEND'; conversation: { id: string; shopId: string; channelId: string; contactId: string } }
+    | { action: 'SUPPRESS'; reason: AutoReplySuppressionReason }
+  > {
+    const now = new Date();
+    const conversation = await tx.conversation.findUniqueOrThrow({
+      where: { id: run.conversationId },
+      select: {
+        id: true,
+        shopId: true,
+        channelId: true,
+        contactId: true,
+        customerServiceWindowExpiresAt: true,
+        aiAutoReplyPaused: true,
+      },
+    });
+
+    // Horaires : uniquement nécessaires en mode « hors ouverture ».
+    let isOpenNow = false;
+    if (config.autoReplyScheduleMode === 'OUTSIDE_BUSINESS_HOURS') {
+      const shop = await tx.shop.findUniqueOrThrow({
+        where: { id: run.shopId },
+        select: {
+          timezone: true,
+          openingHours: {
+            select: { dayOfWeek: true, opensAtMinutes: true, closesAtMinutes: true },
+          },
+        },
+      });
+      isOpenNow = computeOpenState(shop.openingHours as OpeningRange[], now, shop.timezone).isOpenNow;
+    }
+
+    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const [autoRepliesSinceLastInbound, autoRepliesLast24h] = await Promise.all([
+      tx.message.count({
+        where: {
+          conversationId: run.conversationId,
+          direction: 'OUTBOUND',
+          isAiGenerated: true,
+          createdAt: { gt: context.anchorCreatedAt },
+        },
+      }),
+      tx.message.count({
+        where: {
+          conversationId: run.conversationId,
+          direction: 'OUTBOUND',
+          isAiGenerated: true,
+          createdAt: { gte: dayAgo },
+        },
+      }),
+    ]);
+
+    const gate = evaluateAutoReplyGate({
+      conversationPaused: conversation.aiAutoReplyPaused,
+      allowedCategories: config.autoReplyAllowedCategories,
+      usedToolNames,
+      confidence: decision.confidence,
+      windowOpen: isCustomerServiceWindowOpen(conversation.customerServiceWindowExpiresAt, now),
+      scheduleMode: config.autoReplyScheduleMode,
+      isOpenNow,
+      autoRepliesSinceLastInbound,
+      autoRepliesLast24h,
+      maxPerConversationPerDay: config.autoReplyMaxPerConversationPerDay,
+    });
+
+    if (gate.action === 'SEND') {
+      return {
+        action: 'SEND',
+        conversation: {
+          id: conversation.id,
+          shopId: conversation.shopId,
+          channelId: conversation.channelId,
+          contactId: conversation.contactId,
+        },
+      };
+    }
+    return { action: 'SUPPRESS', reason: gate.reason };
+  }
+
+  /** Audit métier IA écrit DANS la transaction (jamais le texte du message). */
+  private async audit(
+    tx: PrismaTx,
+    run: RunRow,
+    eventType: 'AI_AUTO_REPLY_SENT' | 'AI_AUTO_REPLY_SUPPRESSED' | 'AI_AUTO_REPLY_ESCALATED',
+    metadata: Record<string, unknown>,
+  ): Promise<void> {
+    await tx.organizationAuditEvent.create({
+      data: {
+        organizationId: run.organizationId,
+        eventType,
+        metadata: { aiRunId: run.id, conversationId: run.conversationId, ...metadata },
+      },
+      select: { id: true },
+    });
   }
 
   /** Vérifications d'obsolescence (ajustement 6). */

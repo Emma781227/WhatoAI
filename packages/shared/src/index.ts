@@ -11,6 +11,7 @@ export * from './order-errors';
 export * from './whatsapp-errors';
 export * from './meta-errors';
 export * from './ai-errors';
+export * from './ai-auto-reply';
 export * from './whatsapp-constants';
 export * from './whatsapp-jobs';
 export * from './ai-jobs';

@@ -32,6 +32,9 @@ interface ConfigurationRow {
   contextMaxMessages: number;
   toolMaxRounds: number;
   autoReplyEnabled: boolean;
+  autoReplyScheduleMode: string;
+  autoReplyMaxPerConversationPerDay: number;
+  autoReplyAllowedCategories: string[];
   humanHandoffEnabled: boolean;
   version: number;
 }
@@ -46,6 +49,9 @@ export function toConfigurationResponse(row: ConfigurationRow): AiConfigurationR
     contextMaxMessages: row.contextMaxMessages,
     toolMaxRounds: row.toolMaxRounds,
     autoReplyEnabled: row.autoReplyEnabled,
+    autoReplyScheduleMode: row.autoReplyScheduleMode,
+    autoReplyMaxPerConversationPerDay: row.autoReplyMaxPerConversationPerDay,
+    autoReplyAllowedCategories: row.autoReplyAllowedCategories,
     humanHandoffEnabled: row.humanHandoffEnabled,
     version: row.version,
   };

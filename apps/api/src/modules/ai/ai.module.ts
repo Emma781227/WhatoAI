@@ -6,6 +6,7 @@ import { WhatsAppQueuesModule } from '../../queues/whatsapp-queues.module';
 import { AuthModule } from '../auth/auth.module';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
+import { AiAutoReplyService } from './ai-auto-reply.service';
 import { AiConfigurationService } from './ai-configuration.service';
 import { AiController } from './ai.controller';
 import { AiRunsService } from './ai-runs.service';
@@ -21,6 +22,7 @@ import { AiSuggestionsService } from './ai-suggestions.service';
   controllers: [AiController],
   providers: [
     AiConfigurationService,
+    AiAutoReplyService,
     AiSuggestionsService,
     AiRunsService,
     TenantGuard,

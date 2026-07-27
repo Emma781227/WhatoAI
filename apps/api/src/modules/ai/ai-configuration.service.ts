@@ -52,6 +52,11 @@ export class AiConfigurationService {
     if (dto.toolMaxRounds !== undefined) data.toolMaxRounds = dto.toolMaxRounds;
     if (dto.humanHandoffEnabled !== undefined) data.humanHandoffEnabled = dto.humanHandoffEnabled;
     if (dto.autoReplyEnabled !== undefined) data.autoReplyEnabled = dto.autoReplyEnabled;
+    if (dto.autoReplyScheduleMode !== undefined) data.autoReplyScheduleMode = dto.autoReplyScheduleMode;
+    if (dto.autoReplyMaxPerConversationPerDay !== undefined)
+      data.autoReplyMaxPerConversationPerDay = dto.autoReplyMaxPerConversationPerDay;
+    if (dto.autoReplyAllowedCategories !== undefined)
+      data.autoReplyAllowedCategories = dto.autoReplyAllowedCategories;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.aiConfiguration.updateMany({

@@ -9,6 +9,7 @@ import { RequirePermissions } from '../../common/tenant/require-permissions.deco
 import { TenantGuard } from '../../common/tenant/tenant.guard';
 import type { TenantContext } from '../../common/tenant/tenant-context.interface';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AiAutoReplyService } from './ai-auto-reply.service';
 import { AiConfigurationService } from './ai-configuration.service';
 import { AiRunsService } from './ai-runs.service';
 import { AiSuggestionsService } from './ai-suggestions.service';
@@ -30,6 +31,7 @@ function auditContext(req: Request) {
 export class AiController {
   constructor(
     private readonly configuration: AiConfigurationService,
+    private readonly autoReply: AiAutoReplyService,
     private readonly suggestions: AiSuggestionsService,
     private readonly runs: AiRunsService,
   ) {}
@@ -104,6 +106,30 @@ export class AiController {
     @Req() req: Request,
   ) {
     return this.suggestions.reject(tenant, conversationId, suggestionId, dto, auditContext(req));
+  }
+
+  // ------------------------------------------------------ auto-reply (pause)
+
+  @Post('conversations/:conversationId/ai/auto-reply/pause')
+  @RequirePermissions(PERMISSIONS.CONVERSATIONS_REPLY)
+  @ApiOperation({ summary: 'Suspend l’auto-réponse IA sur cette conversation (reprise humaine)' })
+  pauseAutoReply(
+    @CurrentTenant() tenant: TenantContext,
+    @Param('conversationId') conversationId: string,
+    @Req() req: Request,
+  ) {
+    return this.autoReply.pause(tenant, conversationId, auditContext(req));
+  }
+
+  @Post('conversations/:conversationId/ai/auto-reply/resume')
+  @RequirePermissions(PERMISSIONS.CONVERSATIONS_REPLY)
+  @ApiOperation({ summary: 'Rend la conversation à l’auto-réponse IA' })
+  resumeAutoReply(
+    @CurrentTenant() tenant: TenantContext,
+    @Param('conversationId') conversationId: string,
+    @Req() req: Request,
+  ) {
+    return this.autoReply.resume(tenant, conversationId, auditContext(req));
   }
 
   // ---------------------------------------------------------------------- runs

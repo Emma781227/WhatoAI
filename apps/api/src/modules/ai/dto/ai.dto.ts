@@ -1,6 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { AI_AUTO_REPLY_CATEGORIES } from '@whauto/shared';
 import {
+  ArrayUnique,
+  IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -14,9 +18,9 @@ import {
 // ------------------------------------------------------------------ requests
 
 /**
- * PATCH configuration IA. `undefined` = inchangé. AUTO_REPLY n'est PAS activable
- * fonctionnellement dans cette phase : `mode` est borné à DISABLED/SUGGEST_ONLY,
- * et `autoReplyEnabled` refusé (voir service — permission ai.enableAutoReply).
+ * PATCH configuration IA. `undefined` = inchangé. Activer AUTO_REPLY (mode ou
+ * `autoReplyEnabled`) exige la permission `ai.enableAutoReply` (voir service) ;
+ * les garde-fous (schedule/plafond/catégories) sont configurables par ai.configure.
  */
 export class UpdateAiConfigurationDto {
   @ApiPropertyOptional({ enum: ['MOCK', 'GEMINI'] })
@@ -69,11 +73,33 @@ export class UpdateAiConfigurationDto {
   @IsBoolean()
   humanHandoffEnabled?: boolean;
 
-  /** Réservé — exige ai.enableAutoReply ET reste sans effet fonctionnel ici. */
+  /** Activation AUTO_REPLY — exige la permission ai.enableAutoReply (voir service). */
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()
   autoReplyEnabled?: boolean;
+
+  /** Couverture de l'auto-réponse : 24/7 ou uniquement hors horaires d'ouverture. */
+  @ApiPropertyOptional({ enum: ['ALWAYS', 'OUTSIDE_BUSINESS_HOURS'] })
+  @IsOptional()
+  @IsIn(['ALWAYS', 'OUTSIDE_BUSINESS_HOURS'])
+  autoReplyScheduleMode?: 'ALWAYS' | 'OUTSIDE_BUSINESS_HOURS';
+
+  /** Plafond de réponses automatiques par conversation et par jour. */
+  @ApiPropertyOptional({ minimum: 1, maximum: 100 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  autoReplyMaxPerConversationPerDay?: number;
+
+  /** Liste blanche des catégories auto-envoyables (déterministe, par outils). */
+  @ApiPropertyOptional({ enum: AI_AUTO_REPLY_CATEGORIES, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsIn([...AI_AUTO_REPLY_CATEGORIES], { each: true })
+  @ArrayUnique()
+  autoReplyAllowedCategories?: string[];
 
   @ApiProperty()
   @IsInt()
@@ -136,8 +162,18 @@ export class AiConfigurationResponseDto {
   @ApiProperty() contextMaxMessages!: number;
   @ApiProperty() toolMaxRounds!: number;
   @ApiProperty() autoReplyEnabled!: boolean;
+  @ApiProperty() autoReplyScheduleMode!: string;
+  @ApiProperty() autoReplyMaxPerConversationPerDay!: number;
+  @ApiProperty({ type: [String] }) autoReplyAllowedCategories!: string[];
   @ApiProperty() humanHandoffEnabled!: boolean;
   @ApiProperty() version!: number;
+}
+
+/** Réponse pause/reprise de l'auto-réponse d'une conversation. */
+export class AiAutoReplyStateDto {
+  @ApiProperty() conversationId!: string;
+  @ApiProperty() mode!: string;
+  @ApiProperty() aiAutoReplyPaused!: boolean;
 }
 
 /** Suggestion renvoyée — contenu de la suggestion uniquement, aucun détail run. */

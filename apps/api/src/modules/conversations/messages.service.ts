@@ -259,7 +259,16 @@ export class MessagesService {
     });
     await tx.conversation.update({
       where: { id: params.conversation.id },
-      data: { lastMessageAt: now, lastOutboundMessageAt: now },
+      // Reprise humaine (sous-phase C) : tout envoi sortant HUMAIN — message
+      // manuel OU acceptation d'une suggestion IA — bascule la conversation en
+      // mode HUMAN et suspend l'auto-réponse (jusqu'à une reprise explicite).
+      // L'auto-envoi de l'IA passe par un autre chemin (worker) et met mode=AI.
+      data: {
+        lastMessageAt: now,
+        lastOutboundMessageAt: now,
+        mode: 'HUMAN',
+        aiAutoReplyPaused: true,
+      },
       select: { id: true },
     });
     const outboxEvent = await tx.outboxEvent.create({

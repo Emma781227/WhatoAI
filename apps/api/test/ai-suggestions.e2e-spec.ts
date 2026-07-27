@@ -419,4 +419,110 @@ describe('IA — suggestions (e2e)', () => {
       .set(authManager());
     expect(asManager.body.items[0].totalTokens).toBe(15);
   });
+
+  // ------------------------------------------------- C4 : config auto-reply
+
+  const configUrl = () => `/api/organizations/${orgId}/shops/${shopId}/ai/configuration`;
+  async function currentVersion(auth: Record<string, string>): Promise<number> {
+    const get = await request(server).get(configUrl()).set(auth);
+    return get.body.version as number;
+  }
+
+  it('config expose les garde-fous AUTO_REPLY et les accepte (schedule/plafond/catégories)', async () => {
+    const version = await currentVersion(authOwner());
+    const patch = await request(server)
+      .patch(configUrl())
+      .set(authOwner())
+      .send({
+        autoReplyScheduleMode: 'OUTSIDE_BUSINESS_HOURS',
+        autoReplyMaxPerConversationPerDay: 3,
+        autoReplyAllowedCategories: ['PRODUCT_INFO', 'AVAILABILITY'],
+        expectedVersion: version,
+      });
+    expect(patch.status).toBe(200);
+    expect(patch.body.autoReplyScheduleMode).toBe('OUTSIDE_BUSINESS_HOURS');
+    expect(patch.body.autoReplyMaxPerConversationPerDay).toBe(3);
+    expect(patch.body.autoReplyAllowedCategories).toEqual(['PRODUCT_INFO', 'AVAILABILITY']);
+
+    const get = await request(server).get(configUrl()).set(authOwner());
+    expect(get.body.autoReplyMaxPerConversationPerDay).toBe(3);
+  });
+
+  it('MANAGER configure les garde-fous SANS activer (les réglages ≠ activation)', async () => {
+    const version = await currentVersion(authManager());
+    const patch = await request(server)
+      .patch(configUrl())
+      .set(authManager())
+      .send({ autoReplyMaxPerConversationPerDay: 7, expectedVersion: version });
+    expect(patch.status).toBe(200);
+    expect(patch.body.autoReplyMaxPerConversationPerDay).toBe(7);
+  });
+
+  it('catégorie invalide → 400', async () => {
+    const version = await currentVersion(authOwner());
+    const patch = await request(server)
+      .patch(configUrl())
+      .set(authOwner())
+      .send({ autoReplyAllowedCategories: ['NOT_A_CATEGORY'], expectedVersion: version });
+    expect(patch.status).toBe(400);
+  });
+
+  it('OWNER active AUTO_REPLY (autoReplyEnabled) — permission ai.enableAutoReply', async () => {
+    const version = await currentVersion(authOwner());
+    const patch = await request(server)
+      .patch(configUrl())
+      .set(authOwner())
+      .send({ mode: 'AUTO_REPLY', autoReplyEnabled: true, expectedVersion: version });
+    expect(patch.status).toBe(200);
+    expect(patch.body.autoReplyEnabled).toBe(true);
+    expect(patch.body.mode).toBe('AUTO_REPLY');
+    // Remise en SUGGEST_ONLY pour ne pas influencer d'autres tests.
+    await request(server)
+      .patch(configUrl())
+      .set(authOwner())
+      .send({ mode: 'SUGGEST_ONLY', autoReplyEnabled: false, expectedVersion: patch.body.version });
+  });
+
+  // -------------------------------------------------- C4 : pause / reprise
+
+  const autoReplyBase = (conv: string) =>
+    `/api/organizations/${orgId}/conversations/${conv}/ai/auto-reply`;
+
+  it('AGENT peut suspendre puis reprendre l’auto-réponse (mode + drapeau + audit)', async () => {
+    const s = await seedSuggestion();
+
+    const pause = await request(server).post(`${autoReplyBase(s.conversationId)}/pause`).set(authAgent());
+    expect([200, 201]).toContain(pause.status);
+    expect(pause.body.aiAutoReplyPaused).toBe(true);
+    expect(pause.body.mode).toBe('HUMAN');
+
+    const afterPause = await prisma.conversation.findUniqueOrThrow({
+      where: { id: s.conversationId },
+      select: { aiAutoReplyPaused: true },
+    });
+    expect(afterPause.aiAutoReplyPaused).toBe(true);
+
+    // Idempotent : re-pause ne casse rien.
+    const rePause = await request(server).post(`${autoReplyBase(s.conversationId)}/pause`).set(authAgent());
+    expect(rePause.body.aiAutoReplyPaused).toBe(true);
+
+    const resume = await request(server).post(`${autoReplyBase(s.conversationId)}/resume`).set(authAgent());
+    expect(resume.body.aiAutoReplyPaused).toBe(false);
+    expect(resume.body.mode).toBe('AI');
+
+    const audits = await prisma.organizationAuditEvent.findMany({
+      where: { organizationId: orgId, eventType: { in: ['AI_AUTO_REPLY_PAUSED', 'AI_AUTO_REPLY_RESUMED'] } },
+      select: { eventType: true, metadata: true },
+    });
+    const forConv = audits.filter((a) => (a.metadata as { conversationId?: string })?.conversationId === s.conversationId);
+    expect(forConv.map((a) => a.eventType).sort()).toEqual(['AI_AUTO_REPLY_PAUSED', 'AI_AUTO_REPLY_RESUMED']);
+  });
+
+  it('pause d’une conversation via une AUTRE organisation → 404', async () => {
+    const s = await seedSuggestion();
+    const res = await request(server)
+      .post(`/api/organizations/${orgBId}/conversations/${s.conversationId}/ai/auto-reply/pause`)
+      .set(authOwner());
+    expect(res.status).toBe(404);
+  });
 });

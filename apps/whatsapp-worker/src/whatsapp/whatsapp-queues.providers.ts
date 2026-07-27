@@ -12,6 +12,11 @@ export const STATUS_QUEUE = Symbol('STATUS_QUEUE');
 /** Connexion + queue dédiées à l'IA — le module IA est autonome côté Redis. */
 export const AI_WORKER_REDIS = Symbol('AI_WORKER_REDIS');
 export const AI_PROCESS_QUEUE = Symbol('AI_PROCESS_QUEUE');
+// Producteur outbound PROPRE au module IA (sous-phase C) : même queue physique
+// que WHATSAPP_QUEUES.OUTBOUND (le processor outbound la consomme) mais publiée
+// via la connexion Redis dédiée de l'IA — le module IA reste indépendant du
+// module WhatsApp. jobId = dispatchId : aucun double envoi logique inter-producteurs.
+export const AI_OUTBOUND_QUEUE = Symbol('AI_OUTBOUND_QUEUE');
 
 /**
  * Producteurs BullMQ du worker : les sweeps de récupération republient vers
@@ -84,5 +89,11 @@ export const aiQueueProviders: Provider[] = [
     inject: [AI_WORKER_REDIS, ConfigService],
     useFactory: (redis: Redis, configService: ConfigService) =>
       buildQueue(AI_QUEUES.PROCESS_MESSAGE, redis, configService),
+  },
+  {
+    provide: AI_OUTBOUND_QUEUE,
+    inject: [AI_WORKER_REDIS, ConfigService],
+    useFactory: (redis: Redis, configService: ConfigService) =>
+      buildQueue(WHATSAPP_QUEUES.OUTBOUND, redis, configService),
   },
 ];

@@ -11,6 +11,7 @@ import {
 } from '../whatsapp/whatsapp-queues.providers';
 import { AiContextService } from './ai-context.service';
 import { AiOrchestratorService } from './ai-orchestrator.service';
+import { AiOutboundSenderService } from './ai-outbound-sender.service';
 import { AiProcessProcessor } from './ai-process.processor';
 import { AiProviderFactory } from './ai-provider.factory';
 import { AiRealtimeEmitter } from './ai-realtime-emitter.service';
@@ -38,8 +39,9 @@ import { AiToolExecutor } from './tools/tool-executor';
     AiProviderFactory,
     AiRealtimeEmitter,
     AiOrchestratorService,
+    AiOutboundSenderService,
   ],
-  exports: [AiSchedulingService, AiToolExecutor, AiOrchestratorService],
+  exports: [AiSchedulingService, AiToolExecutor, AiOrchestratorService, AiOutboundSenderService],
 })
 export class AiModule implements OnApplicationShutdown {
   constructor(

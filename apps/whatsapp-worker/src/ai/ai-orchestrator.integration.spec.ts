@@ -7,6 +7,7 @@ import { PrismaClient } from '@whauto/database';
 
 import { AiContextService } from './ai-context.service';
 import { AiOrchestratorService } from './ai-orchestrator.service';
+import { AiOutboundSenderService } from './ai-outbound-sender.service';
 import type { AiProviderFactory } from './ai-provider.factory';
 import type { AiRealtimeEmitter } from './ai-realtime-emitter.service';
 import { AiToolExecutor } from './tools/tool-executor';
@@ -62,6 +63,11 @@ async function nextStep(): Promise<AiProviderResponse> {
 let currentProvider: AiProvider = scripted;
 const factory = { getProvider: () => currentProvider } as unknown as AiProviderFactory;
 
+const outboundSender = new AiOutboundSenderService(
+  P,
+  emitter,
+  { add: async () => undefined } as unknown as ConstructorParameters<typeof AiOutboundSenderService>[2],
+);
 const orchestrator = new AiOrchestratorService(
   P,
   config,
@@ -69,6 +75,7 @@ const orchestrator = new AiOrchestratorService(
   factory,
   new AiToolExecutor(P),
   emitter,
+  outboundSender,
 );
 
 // --- Fabriques de réponses provider ----------------------------------------
