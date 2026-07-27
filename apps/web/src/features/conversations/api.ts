@@ -53,6 +53,7 @@ export interface Conversation {
   contactId: string;
   status: ConversationStatus;
   mode: ConversationMode;
+  aiAutoReplyPaused: boolean;
   priority: ConversationPriority;
   assignedMembershipId: string | null;
   lastMessageAt: string;

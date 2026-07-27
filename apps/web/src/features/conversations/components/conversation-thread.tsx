@@ -22,6 +22,8 @@ import { memberKeys, membershipsApi } from '@/features/memberships/api';
 import { useOrganization } from '@/features/organizations/organization-provider';
 import { ProductPickerDialog } from '@/features/products/components/product-picker-dialog';
 import { SuggestionPanel } from '@/features/ai-suggestions/components/suggestion-panel';
+import { useAiConfig } from '@/features/ai-config/use-ai-config';
+import { AutoReplyControl } from './auto-reply-control';
 import { useComposerInsert } from '../composer-insert';
 import { useRetryMessage, useSendMessage } from '@/features/messages/use-conversation-messages';
 import { useConversationMessages } from '@/features/messages/use-conversation-messages';
@@ -77,6 +79,11 @@ export function ConversationThread({
 
   const conversationQuery = useConversation(conversationId);
   const conversation = conversationQuery.data ?? null;
+  // Config IA de la Shop (AI_READ = tous les rôles) : ne montrer le contrôle
+  // d'auto-réponse que lorsque la Shop est réellement en AUTO_REPLY activé.
+  const aiConfigQuery = useAiConfig(conversation?.shopId ?? null, can(PERMISSIONS.AI_READ));
+  const autoReplyActive =
+    aiConfigQuery.data?.mode === 'AUTO_REPLY' && aiConfigQuery.data.autoReplyEnabled === true;
   const messagesQuery = useConversationMessages(conversationId);
   const sendMutation = useSendMessage(conversation);
   const retryMutation = useRetryMessage(conversationId);
@@ -330,6 +337,17 @@ export function ConversationThread({
           <Info aria-hidden className="h-4 w-4" />
         </Button>
       </div>
+
+      {/* Barre auto-réponse IA (uniquement si la Shop est en AUTO_REPLY activé) */}
+      {autoReplyActive ? (
+        <div className="flex items-center border-b border-border bg-[#7C3AED]/5 px-3 py-1.5 dark:bg-[#7C3AED]/10">
+          <AutoReplyControl
+            organizationId={organizationId}
+            conversationId={conversationId}
+            paused={conversation.aiAutoReplyPaused}
+          />
+        </div>
+      ) : null}
 
       {/* Fil */}
       <div className="min-h-0 flex-1 overflow-y-auto bg-muted/30 p-4">

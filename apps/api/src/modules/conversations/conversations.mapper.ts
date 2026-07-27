@@ -61,6 +61,7 @@ export const CONVERSATION_PUBLIC_SELECT = {
   contactId: true,
   status: true,
   mode: true,
+  aiAutoReplyPaused: true,
   priority: true,
   assignedMembershipId: true,
   lastMessageAt: true,

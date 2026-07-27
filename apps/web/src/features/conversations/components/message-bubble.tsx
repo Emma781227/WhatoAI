@@ -1,6 +1,15 @@
 'use client';
 
-import { AlertCircle, Check, CheckCheck, Clock, Paperclip, RotateCcw, StickyNote } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  CheckCheck,
+  Clock,
+  Paperclip,
+  RotateCcw,
+  Sparkles,
+  StickyNote,
+} from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -75,6 +84,9 @@ export function MessageBubble({
   }
 
   const isOutbound = message.direction === 'OUTBOUND';
+  // Message émis AUTOMATIQUEMENT par l'IA (sous-phase C) : violet #7C3AED,
+  // visuellement distinct d'une réponse humaine (couleur primaire).
+  const isAiMessage = isOutbound && message.senderType === 'AI';
   const isLocalOptimisticFailure =
     message.status === 'FAILED' && message.id.startsWith('optimistic:');
 
@@ -83,13 +95,22 @@ export function MessageBubble({
       <div
         className={cn(
           'max-w-[85%] rounded-2xl px-3 py-2 text-sm shadow-sm sm:max-w-[70%]',
-          isOutbound
-            ? 'rounded-br-sm bg-primary text-primary-foreground'
-            : 'rounded-bl-sm border border-border bg-card text-foreground',
+          isAiMessage
+            ? 'rounded-br-sm bg-[#7C3AED] text-white'
+            : isOutbound
+              ? 'rounded-br-sm bg-primary text-primary-foreground'
+              : 'rounded-bl-sm border border-border bg-card text-foreground',
         )}
         data-testid={isOutbound ? 'message-outbound' : 'message-inbound'}
         data-message-status={message.status}
+        data-ai-message={isAiMessage || undefined}
       >
+        {isAiMessage ? (
+          <span className="mb-0.5 flex items-center gap-1 text-[10px] font-medium text-white/90">
+            <Sparkles aria-hidden className="h-3 w-3" />
+            Réponse IA
+          </span>
+        ) : null}
         {message.textContent ? (
           <p className="whitespace-pre-wrap break-words">{message.textContent}</p>
         ) : (
@@ -103,7 +124,11 @@ export function MessageBubble({
         <span
           className={cn(
             'mt-1 flex items-center justify-end gap-1 text-[10px]',
-            isOutbound ? 'text-primary-foreground/80' : 'text-muted-foreground',
+            isAiMessage
+              ? 'text-white/80'
+              : isOutbound
+                ? 'text-primary-foreground/80'
+                : 'text-muted-foreground',
           )}
         >
           {messageTime(message.createdAt)}

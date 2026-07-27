@@ -40,6 +40,12 @@ export interface AcceptResult {
   message: { id: string };
 }
 
+export interface AutoReplyState {
+  conversationId: string;
+  mode: string;
+  aiAutoReplyPaused: boolean;
+}
+
 /** Query keys scoppées par organisation + conversation. */
 export const aiKeys = {
   all: (org: string) => ['ai', org] as const,
@@ -81,6 +87,20 @@ export const aiSuggestionsApi = {
     return apiRequest(
       `/organizations/${org}/conversations/${conversationId}/ai/suggestions/${suggestionId}/reject`,
       { method: 'POST', body: input },
+    );
+  },
+
+  pauseAutoReply(org: string, conversationId: string): Promise<AutoReplyState> {
+    return apiRequest(
+      `/organizations/${org}/conversations/${conversationId}/ai/auto-reply/pause`,
+      { method: 'POST' },
+    );
+  },
+
+  resumeAutoReply(org: string, conversationId: string): Promise<AutoReplyState> {
+    return apiRequest(
+      `/organizations/${org}/conversations/${conversationId}/ai/auto-reply/resume`,
+      { method: 'POST' },
     );
   },
 };

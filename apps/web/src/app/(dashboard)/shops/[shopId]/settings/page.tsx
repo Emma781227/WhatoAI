@@ -12,6 +12,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { AiConfigCard } from '@/features/ai-config/components/ai-config-card';
 import { useOrganization } from '@/features/organizations/organization-provider';
 import { shopKeys, shopsApi } from '@/features/shops/api';
 import { OpeningHoursEditor } from '@/features/shops/components/opening-hours-editor';
@@ -134,6 +135,8 @@ export default function ShopSettingsPage() {
             )}
           </CardContent>
         </Card>
+
+        {can(PERMISSIONS.AI_READ) ? <AiConfigCard shopId={shopId} /> : null}
       </div>
     </div>
   );
