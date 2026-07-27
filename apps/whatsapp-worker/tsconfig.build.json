@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Le tsbuildinfo doit vivre dans dist : nest build supprime dist (deleteOutDir)
+    // et un tsbuildinfo survivant ferait sauter la réémission des fichiers inchangés.
+    "tsBuildInfoFile": "dist/tsconfig.build.tsbuildinfo"
+  },
+  "exclude": ["node_modules", "dist", "test", "**/*.spec.ts"]
+}

@@ -1,0 +1,1960 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MANAGER
+  AGENT
+}
+
+// Volontairement distinct de MembershipRole : la base ne doit pas pouvoir
+// stocker une invitation OWNER (l'OWNER unique naît avec l'organisation).
+enum InvitationRole {
+  ADMIN
+  MANAGER
+  AGENT
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum MembershipStatus {
+  ACTIVE
+  SUSPENDED
+  LEFT
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+  EXPIRED
+}
+
+enum OrganizationAuditEventType {
+  ORGANIZATION_CREATED
+  ORGANIZATION_UPDATED
+  ORGANIZATION_ARCHIVED
+  MEMBER_INVITED
+  INVITATION_RESENT
+  INVITATION_ACCEPTED
+  INVITATION_DECLINED
+  INVITATION_CANCELLED
+  MEMBER_ROLE_CHANGED
+  MEMBER_REMOVED
+  MEMBER_LEFT
+  SHOP_CREATED
+  SHOP_UPDATED
+  SHOP_ACTIVATED
+  SHOP_DEACTIVATED
+  SHOP_SET_PRIMARY
+  SHOP_ARCHIVED
+  SHOP_OPENING_HOURS_UPDATED
+  WHATSAPP_CHANNEL_CONNECTED
+  WHATSAPP_CHANNEL_DISCONNECTED
+  CONVERSATION_ASSIGNED
+  CONVERSATION_UNASSIGNED
+  CONVERSATION_STATUS_CHANGED
+  CONVERSATION_TAG_ADDED
+  CONVERSATION_TAG_REMOVED
+  CATEGORY_CREATED
+  CATEGORY_UPDATED
+  CATEGORY_ARCHIVED
+  CART_CREATED
+  CART_ITEM_ADDED
+  CART_ITEM_UPDATED
+  CART_ITEM_REMOVED
+  CART_CLEARED
+  CART_ABANDONED
+  CART_EXPIRED
+  CHECKOUT_STARTED
+  CHECKOUT_UPDATED
+  CHECKOUT_CONFIRMED
+  STOCK_RESERVED
+  STOCK_RELEASED
+  PRODUCT_CREATED
+  PRODUCT_UPDATED
+  PRODUCT_ACTIVATED
+  PRODUCT_DEACTIVATED
+  PRODUCT_ARCHIVED
+  VARIANT_CREATED
+  VARIANT_UPDATED
+  VARIANT_ARCHIVED
+  INVENTORY_ADJUSTED
+  ORDER_CREATED
+  ORDER_STATUS_CHANGED
+  ORDER_CANCELLED
+  ORDER_NOTE_ADDED
+  ORDER_STOCK_CONSUMED
+  ORDER_STOCK_RESTORED
+  META_CHANNEL_CONNECTED
+  META_CHANNEL_TESTED
+  META_CHANNEL_ERROR
+  AI_CONFIGURATION_UPDATED
+  AI_SUGGESTION_GENERATED
+  AI_SUGGESTION_ACCEPTED
+  AI_SUGGESTION_REJECTED
+  AI_SUGGESTION_REGENERATED
+  AI_HANDOFF_REQUESTED
+}
+
+// ============================================================================
+// Module Orders — enums
+// ============================================================================
+
+// Une Order naît directement CONFIRMED (décision validée D4 — la conversion
+// n'intervient qu'après un checkout CONFIRMED, pas de PENDING_CONFIRMATION).
+enum OrderStatus {
+  CONFIRMED
+  PROCESSING
+  READY
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+// PAID/FAILED/REFUNDED/PARTIALLY_REFUNDED préparés : AUCUNE route n'y mène
+// dans cette phase (module Payment Mock à venir). Mapping initial figé :
+// CASH_ON_DELIVERY | PAY_IN_STORE | UNDECIDED → UNPAID ;
+// MOBILE_MONEY | CARD → PENDING.
+enum OrderPaymentStatus {
+  UNPAID
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum OrderFulfillmentStatus {
+  PENDING
+  PREPARING
+  READY_FOR_PICKUP
+  READY_FOR_SHIPMENT
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+  NOT_REQUIRED
+}
+
+// PAYMENT/DELIVERY/AUTOMATION préparés pour les phases suivantes — seuls
+// USER et SYSTEM sont émis dans cette phase.
+enum OrderStatusSource {
+  USER
+  SYSTEM
+  PAYMENT
+  DELIVERY
+  AUTOMATION
+}
+
+// Dimension réellement modifiée par une ligne d'historique (validé — ajustement 17).
+enum OrderStatusChangeType {
+  ORDER_STATUS
+  PAYMENT_STATUS
+  FULFILLMENT_STATUS
+  MULTIPLE
+}
+
+enum ProductCategoryStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum ProductType {
+  PHYSICAL
+  SERVICE
+  DIGITAL
+}
+
+enum ProductVariantStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum InventoryMovementType {
+  INITIAL
+  ADJUSTMENT
+  RESTOCK
+  DAMAGE
+  RETURN
+  RESERVATION
+  RELEASE
+  SALE
+  CANCELLATION
+}
+
+enum CartStatus {
+  ACTIVE
+  CHECKOUT_STARTED
+  CONVERTED
+  ABANDONED
+  EXPIRED
+}
+
+enum StockReservationStatus {
+  ACTIVE
+  RELEASED
+  EXPIRED
+  CONSUMED
+  CANCELLED
+}
+
+enum CheckoutStatus {
+  COLLECTING_INFORMATION
+  READY_FOR_CONFIRMATION
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+}
+
+enum FulfillmentType {
+  DELIVERY
+  PICKUP
+}
+
+enum PaymentPreference {
+  CASH_ON_DELIVERY
+  MOBILE_MONEY
+  CARD
+  PAY_IN_STORE
+  UNDECIDED
+}
+
+enum WhatsAppProviderType {
+  MOCK
+  META_CLOUD
+}
+
+enum WhatsAppChannelStatus {
+  DISCONNECTED
+  CONNECTING
+  CONNECTED
+  ERROR
+  SUSPENDED
+}
+
+enum ContactStatus {
+  ACTIVE
+  BLOCKED
+  ARCHIVED
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum ConversationMode {
+  HUMAN
+  AI
+  HYBRID
+}
+
+enum ConversationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+  INTERNAL
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  LOCATION
+  CONTACT
+  STICKER
+  INTERACTIVE
+  TEMPLATE
+  // Type non pris en charge dans cette phase (le vrai type est conservé,
+  // jamais converti en texte ; l'UI génère le libellé « non pris en charge »).
+  UNSUPPORTED
+  SYSTEM
+  INTERNAL_NOTE
+}
+
+enum MessageStatus {
+  RECEIVED
+  PENDING
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum MessageSenderType {
+  CUSTOMER
+  AGENT
+  AI
+  SYSTEM
+}
+
+// Durable inbox : tout événement fournisseur validé est persisté AVANT l'ACK
+// webhook et avant toute publication BullMQ — Redis n'est jamais la seule
+// trace d'un événement entrant.
+enum WhatsAppInboundEventStatus {
+  RECEIVED
+  QUEUED
+  PROCESSING
+  PROCESSED
+  FAILED
+  // Statut fournisseur reçu avant son Message (providerMessageId encore
+  // inconnu) : en attente de réconciliation par le sweep.
+  WAITING_MESSAGE
+  // Message jamais retrouvé après expiration : terminal, non destructif
+  // (jamais FAILED, qui est réservé aux vraies erreurs techniques).
+  ORPHANED
+}
+
+enum OutboxEventStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+enum OutboxEventType {
+  WHATSAPP_MESSAGE_SEND_REQUESTED
+}
+
+enum ShopStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum BusinessType {
+  RETAIL
+  FASHION
+  BEAUTY
+  FOOD
+  RESTAURANT
+  ELECTRONICS
+  SERVICES
+  HEALTH
+  EDUCATION
+  TRAVEL
+  OTHER
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum AuthAuditEventType {
+  REGISTER_SUCCESS
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGOUT
+  LOGOUT_ALL
+  REFRESH_SUCCESS
+  REFRESH_REUSE_DETECTED
+  EMAIL_VERIFIED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  PASSWORD_CHANGED
+  SESSION_REVOKED
+}
+
+model User {
+  id                 String                    @id @default(cuid())
+  email              String                    @unique
+  passwordHash       String
+  firstName          String
+  lastName           String
+  status             UserStatus                @default(PENDING_VERIFICATION)
+  emailVerifiedAt    DateTime?
+  lastLoginAt        DateTime?
+  passwordChangedAt  DateTime?
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+
+  memberships             Membership[]
+  sessions                Session[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  authAuditEvents         AuthAuditEvent[]
+  createdOrganizations    Organization[]           @relation("OrganizationCreatedBy")
+  createdShops            Shop[]                   @relation("ShopCreatedBy")
+  sentInvitations         OrganizationInvitation[] @relation("InvitationInvitedBy")
+  orgAuditEventsAsActor   OrganizationAuditEvent[] @relation("OrgAuditActor")
+  orgAuditEventsAsTarget  OrganizationAuditEvent[] @relation("OrgAuditTarget")
+  sentMessages            Message[]                @relation("MessageSenderUser")
+  createdProducts         Product[]                @relation("ProductCreatedBy")
+  inventoryMovements      InventoryMovement[]      @relation("InventoryMovementActor")
+  createdOrders           Order[]                  @relation("OrderCreatedBy")
+  orderStatusChanges      OrderStatusHistory[]     @relation("OrderStatusHistoryActor")
+  orderNotes              OrderNote[]              @relation("OrderNoteAuthor")
+  acceptedAiSuggestions   AiSuggestion[]           @relation("AiSuggestionAcceptedBy")
+  rejectedAiSuggestions   AiSuggestion[]           @relation("AiSuggestionRejectedBy")
+
+  @@map("users")
+}
+
+model Organization {
+  id              String             @id @default(cuid())
+  name            String
+  slug            String             @unique
+  status          OrganizationStatus @default(ACTIVE)
+  createdByUserId String?
+  timezone        String             @default("Africa/Douala")
+  defaultCurrency String             @default("XAF")
+  defaultLocale   String             @default("fr")
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  createdBy        User?                    @relation("OrganizationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  memberships      Membership[]
+  invitations      OrganizationInvitation[]
+  auditEvents      OrganizationAuditEvent[]
+  shops            Shop[]
+  whatsappChannels WhatsAppChannel[]
+  contacts         Contact[]
+  conversations    Conversation[]
+  messages         Message[]
+  tags             Tag[]
+  inboundEvents    WhatsAppInboundEvent[]
+  outboxEvents     OutboxEvent[]
+
+  productCategories  ProductCategory[]
+  products           Product[]
+  productVariants    ProductVariant[]
+  productOptions     ProductOption[]
+  productImages      ProductImage[]
+  inventoryItems     InventoryItem[]
+  inventoryMovements InventoryMovement[]
+
+  carts             Cart[]
+  cartItems         CartItem[]
+  stockReservations StockReservation[]
+  checkoutSessions  CheckoutSession[]
+  cartMutations     CartMutation[]
+
+  orders             Order[]
+  orderItems         OrderItem[]
+  orderSequences     OrderSequence[]
+  orderStatusHistory OrderStatusHistory[]
+  orderNotes         OrderNote[]
+  orderMutations     OrderMutation[]
+
+  aiConfigurations     AiConfiguration[]
+  aiRuns               AiRun[]
+  aiSuggestions        AiSuggestion[]
+  aiToolCalls          AiToolCall[]
+  conversationHandoffs ConversationHandoff[]
+
+  @@map("organizations")
+}
+
+// Toute Shop appartient à une Organization (cascade : supprimer une
+// Organization supprime ses Shops, qui suppriment leurs horaires — aucun
+// mécanisme de suppression physique d'Organization n'existe dans cette phase,
+// la cascade ne joue donc qu'en environnement de test/dev).
+model Shop {
+  id             String        @id @default(cuid())
+  organizationId String
+  name           String
+  slug           String
+  description    String?
+  status         ShopStatus    @default(DRAFT)
+  isPrimary      Boolean       @default(false)
+  businessType   BusinessType?
+
+  logoUrl      String?
+  coverUrl     String?
+  websiteUrl   String?
+  supportEmail String?
+  supportPhone String?
+
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  region       String?
+  postalCode   String?
+  latitude     Float?
+  longitude    Float?
+  countryCode  String // ISO 3166-1 alpha-2, requis, jamais déduit de la devise
+
+  timezone String
+  currency String
+  locale   String
+
+  returnPolicy      String?
+  deliveryPolicy    String?
+  orderInstructions String?
+
+  // Préfixe STABLE des numéros de commande (validé — ajustement 1) : généré
+  // une seule fois (dérivé du slug puis unicifié) au premier besoin et
+  // conservé — un changement de slug ultérieur ne le modifie JAMAIS sans
+  // action explicite. Unicité insensible à la casse par organisation via
+  // index fonctionnel SQL brut (shops_order_number_prefix_ci_per_org).
+  orderNumberPrefix String?
+
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  archivedAt      DateTime?
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy        User?             @relation("ShopCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  openingHours     ShopOpeningHour[]
+  whatsappChannels WhatsAppChannel[]
+  contacts         Contact[]
+  conversations    Conversation[]
+  messages         Message[]
+
+  productCategories  ProductCategory[]
+  products           Product[]
+  productVariants    ProductVariant[]
+  productOptions     ProductOption[]
+  productImages      ProductImage[]
+  inventoryItems     InventoryItem[]
+  inventoryMovements InventoryMovement[]
+
+  carts            Cart[]
+  checkoutSessions CheckoutSession[]
+  orders           Order[]
+  orderSequences   OrderSequence[]
+
+  aiConfiguration      AiConfiguration?
+  aiRuns               AiRun[]
+  aiSuggestions        AiSuggestion[]
+  aiToolCalls          AiToolCall[]
+  conversationHandoffs ConversationHandoff[]
+
+  // Index unique partiel supplémentaire en SQL brut dans la migration
+  // (inexprimable en Prisma) : une seule Shop principale non archivée par org.
+  @@unique([organizationId, slug])
+  // Cible de la FK composite des WhatsAppChannels : garantit EN BASE qu'un
+  // canal ne peut référencer une Shop que dans sa propre organisation.
+  @@unique([id, organizationId])
+  @@index([organizationId, status])
+  @@map("shops")
+}
+
+// Une ligne = une plage d'ouverture. Un jour fermé n'a aucune ligne.
+// Heures en minutes depuis minuit (0-1439), pas de plage traversant minuit.
+model ShopOpeningHour {
+  id              String    @id @default(cuid())
+  shopId          String
+  dayOfWeek       DayOfWeek
+  opensAtMinutes  Int
+  closesAtMinutes Int
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, dayOfWeek])
+  @@map("shop_opening_hours")
+}
+
+// Un membre retiré ou parti passe à status=LEFT (jamais supprimé) : la
+// contrainte @@unique(userId, organizationId) impose de RÉACTIVER cette ligne
+// (nouveau rôle, nouveau joinedAt) lors d'une réinvitation acceptée.
+// SUSPENDED ne doit jamais être réactivé automatiquement.
+model Membership {
+  id             String           @id @default(cuid())
+  role           MembershipRole
+  status         MembershipStatus @default(ACTIVE)
+  userId         String
+  organizationId String
+  joinedAt       DateTime         @default(now())
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  assignedConversations Conversation[]        @relation("ConversationAssignee")
+  acceptedHandoffs      ConversationHandoff[] @relation("ConversationHandoffAcceptedBy")
+
+  // Index unique partiel supplémentaire en SQL brut dans la migration
+  // (inexprimable en Prisma) : un seul OWNER ACTIVE par organisation.
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("memberships")
+}
+
+model OrganizationInvitation {
+  id              String           @id @default(cuid())
+  organizationId  String
+  email           String
+  role            InvitationRole
+  tokenHash       String           @unique
+  status          InvitationStatus @default(PENDING)
+  invitedByUserId String?
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  declinedAt      DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    User?        @relation("InvitationInvitedBy", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  // Index unique partiel supplémentaire en SQL brut dans la migration
+  // (inexprimable en Prisma) : une seule invitation PENDING par (org, email).
+  @@index([organizationId])
+  @@index([email])
+  @@map("organization_invitations")
+}
+
+model OrganizationAuditEvent {
+  id             String                     @id @default(cuid())
+  organizationId String
+  actorUserId    String?
+  targetUserId   String?
+  eventType      OrganizationAuditEventType
+  metadata       Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime                   @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?        @relation("OrgAuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  target       User?        @relation("OrgAuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([eventType])
+  @@map("organization_audit_events")
+}
+
+// Une ligne = une version d'un refresh token. La rotation crée une nouvelle
+// ligne dans la même familyId plutôt que de muter la ligne existante, ce qui
+// donne une piste d'audit complète et permet de détecter la réutilisation
+// d'un token déjà remplacé (replacedBySessionId déjà renseigné).
+model Session {
+  id                  String    @id @default(cuid())
+  userId              String
+  familyId            String
+  refreshTokenHash    String    @unique
+  userAgent           String?
+  ipAddress           String?
+  createdAt           DateTime  @default(now())
+  lastUsedAt          DateTime  @default(now())
+  expiresAt           DateTime
+  revokedAt           DateTime?
+  reason              String?
+  replacedBySessionId String?   @unique
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBySession Session? @relation("SessionRotation", fields: [replacedBySessionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  replacesSession   Session? @relation("SessionRotation")
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("sessions")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model AuthAuditEvent {
+  id        String             @id @default(cuid())
+  userId    String?
+  eventType AuthAuditEventType
+  ipAddress String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime           @default(now())
+  user      User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([eventType])
+  @@map("auth_audit_events")
+}
+
+// ============================================================================
+// Module WhatsApp / Conversations
+// ============================================================================
+
+// La relation Shop est une FK composite (shopId, organizationId) →
+// shops(id, organizationId) : la base elle-même refuse un canal rattaché à
+// une Shop d'une autre organisation, même par écriture SQL directe.
+// Index unique partiel en SQL brut : au plus un canal "actif"
+// (CONNECTING/CONNECTED/SUSPENDED) par Shop. ERROR n'occupe PAS le slot :
+// un canal en erreur peut être remplacé, son historique est conservé.
+model WhatsAppChannel {
+  id                     String                @id @default(cuid())
+  organizationId         String
+  shopId                 String
+  provider               WhatsAppProviderType
+  status                 WhatsAppChannelStatus @default(DISCONNECTED)
+  displayName            String
+  phoneNumber            String // tel que fourni
+  phoneNumberId          String? // Meta Cloud — inutilisé en MOCK
+  wabaId                 String?
+  businessId             String?
+  externalAccountId      String?
+  displayPhoneNumber     String? // Meta — numéro affiché (non secret)
+  verifiedName           String? // Meta — nom vérifié du compte (non secret)
+  // Secrets Meta jamais stockés dans cette phase (config env) : ces colonnes
+  // restent nulles et ne sont JAMAIS sérialisées.
+  accessTokenEncrypted   String?
+  webhookSecretEncrypted String?
+  connectedAt            DateTime?
+  disconnectedAt         DateTime?
+  lastWebhookAt          DateTime? // dernier webhook Meta reçu (diagnostic UI)
+  lastErrorCode          String?
+  lastErrorMessage       String?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+
+  organization  Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop          Shop                   @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  conversations Conversation[]
+  messages      Message[]
+  inboundEvents WhatsAppInboundEvent[]
+
+  @@index([organizationId])
+  @@index([shopId, status])
+  @@map("whatsapp_channels")
+}
+
+model Contact {
+  id                String        @id @default(cuid())
+  organizationId    String
+  shopId            String
+  externalId        String? // wa_id Meta plus tard
+  whatsappPhone     String // numéro tel que reçu du fournisseur
+  normalizedPhone   String // E.164 canonique (libphonenumber-js)
+  displayName       String?
+  profilePictureUrl String?
+  email             String?
+  language          String?
+  city              String?
+  countryCode       String?
+  notes             String?
+  status            ContactStatus @default(ACTIVE)
+  lastActivityAt    DateTime      @default(now())
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop          Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  messages      Message[]
+  carts         Cart[]
+  orders        Order[]
+
+  // Le même numéro peut exister dans deux Shops distinctes, jamais deux fois
+  // dans la même Shop.
+  @@unique([shopId, normalizedPhone])
+  // Cible de la FK composite des Carts : un panier ne peut relier qu'un
+  // contact de SA Shop (ajout additif validé — phase panier).
+  @@unique([id, shopId])
+  @@index([organizationId, shopId, status])
+  @@index([organizationId, lastActivityAt])
+  @@map("contacts")
+}
+
+// Index unique partiel en SQL brut : une seule conversation OPEN/PENDING par
+// (channelId, contactId) — deux webhooks concurrents ne créent jamais deux
+// conversations actives. RESOLVED est rouvrable manuellement (protégé par ce
+// même index) ; CLOSED est terminal.
+model Conversation {
+  id                             String               @id @default(cuid())
+  organizationId                 String
+  shopId                         String
+  channelId                      String
+  contactId                      String
+  status                         ConversationStatus   @default(OPEN)
+  mode                           ConversationMode     @default(HUMAN)
+  priority                       ConversationPriority @default(NORMAL)
+  assignedMembershipId           String?
+  lastMessageAt                  DateTime             @default(now())
+  lastInboundMessageAt           DateTime?
+  lastOutboundMessageAt          DateTime?
+  unreadCount                    Int                  @default(0)
+  customerServiceWindowExpiresAt DateTime?
+  resolvedAt                     DateTime?
+  createdAt                      DateTime             @default(now())
+  updatedAt                      DateTime             @updatedAt
+
+  organization       Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop               Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  channel            WhatsAppChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contact            Contact           @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedMembership Membership?       @relation("ConversationAssignee", fields: [assignedMembershipId], references: [id], onDelete: SetNull)
+  messages           Message[]
+  tags               ConversationTag[]
+  carts              Cart[]
+  orders             Order[]
+  aiRuns             AiRun[]
+  aiSuggestions      AiSuggestion[]
+  handoffs           ConversationHandoff[]
+
+  // Cible de la FK composite des Carts (ajout additif validé — phase panier).
+  @@unique([id, shopId])
+  @@index([organizationId, shopId, status, lastMessageAt(sort: Desc)])
+  @@index([assignedMembershipId])
+  @@index([contactId])
+  @@map("conversations")
+}
+
+// providerPayload : extrait FILTRÉ et borné (jamais de token, signature ou
+// header sensible) — le payload brut durable vit dans WhatsAppInboundEvent.
+model Message {
+  id                String            @id @default(cuid())
+  organizationId    String
+  shopId            String
+  conversationId    String
+  channelId         String
+  contactId         String
+  externalMessageId String? // id fournisseur (wamid.mock.* en MOCK)
+  clientMessageId   String? // idempotence frontend (retry réseau)
+  direction         MessageDirection
+  type              MessageType
+  status            MessageStatus
+  senderType        MessageSenderType
+  senderUserId      String?
+  textContent       String?
+  mediaUrl          String?
+  mediaMimeType     String?
+  mediaFileName     String?
+  quotedMessageId   String?
+  providerPayload   Json?
+  errorCode         String?
+  errorMessage      String?
+
+  // Suivi des tentatives d'envoi provider. dispatchId est stable pour un
+  // cycle d'envoi donné (jobId BullMQ = dispatchId : une republication outbox
+  // ne produit jamais un second envoi logique) ; un retry explicite d'un
+  // message FAILED génère un NOUVEAU dispatchId. Risque documenté : un envoi
+  // externe réussi dont la réponse réseau est perdue peut être retenté —
+  // aucune idempotence externe n'est garantie par Meta dans cette phase.
+  dispatchId    String?
+  attemptCount  Int       @default(0)
+  lastAttemptAt DateTime?
+
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  failedAt    DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop          Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  conversation  Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  channel       WhatsAppChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  contact       Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  senderUser    User?           @relation("MessageSenderUser", fields: [senderUserId], references: [id], onDelete: SetNull)
+  quotedMessage Message?        @relation("MessageQuote", fields: [quotedMessageId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  quotedBy      Message[]       @relation("MessageQuote")
+
+  aiRunTriggered           AiRun?         @relation("AiRunTriggerMessage")
+  aiRunsAsContext          AiRun[]        @relation("AiRunContextMessage")
+  aiSuggestionsAsContext   AiSuggestion[] @relation("AiSuggestionContextMessage")
+  aiSuggestionsAsSent      AiSuggestion[] @relation("AiSuggestionSentMessage")
+
+  // Idempotence inbound : PostgreSQL traite les NULL comme distincts, les
+  // messages sans id externe (sortants pas encore envoyés) ne collisionnent pas.
+  @@unique([channelId, externalMessageId])
+  // Idempotence outbound côté frontend.
+  @@unique([conversationId, clientMessageId])
+  @@index([conversationId, createdAt])
+  @@index([organizationId, shopId])
+  @@map("messages")
+}
+
+model Tag {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  color          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversations ConversationTag[]
+
+  @@unique([organizationId, name])
+  @@map("tags")
+}
+
+model ConversationTag {
+  conversationId String
+  tagId          String
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tag          Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, tagId])
+  @@index([tagId])
+  @@map("conversation_tags")
+}
+
+// Durable inbox — un événement fournisseur validé est persisté ici AVANT
+// l'ACK webhook et avant toute publication BullMQ. payload = événement brut
+// borné et filtré (jamais de signature, token ou header sensible). Le sweep
+// périodique du worker récupère les RECEIVED/FAILED éligibles : une panne
+// Redis après persistance ne perd jamais d'événement.
+model WhatsAppInboundEvent {
+  id               String                     @id @default(cuid())
+  organizationId   String
+  channelId        String
+  externalEventId  String
+  eventKind        String // 'message' | 'status'
+  payload          Json
+  status           WhatsAppInboundEventStatus @default(RECEIVED)
+  attemptCount     Int                        @default(0)
+  lastErrorCode    String?
+  lastErrorMessage String?
+  queuedAt         DateTime?
+  processedAt      DateTime?
+  failedAt         DateTime?
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      WhatsAppChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  // Deux livraisons du même webhook = une seule ligne (P2002 → déjà reçu).
+  @@unique([channelId, externalEventId])
+  @@index([status, createdAt])
+  @@index([organizationId])
+  @@map("whatsapp_inbound_events")
+}
+
+// ============================================================================
+// Module Catalogue (Products + Categories + Variants + Inventory)
+//
+// Cohérence cross-tenant et cross-entité garantie EN BASE par des FK
+// composites (pattern validé au module WhatsApp) :
+// - toute table catalogue → shops(id, organizationId) ;
+// - Product → product_categories(id, shopId) : catégorie étrangère refusée ;
+// - Variant/Option/Image → products(id, shopId) : produit d'une autre Shop refusé ;
+// - ProductVariantOptionValue chaîne (variantId, productId) + (optionId,
+//   productId) + (optionValueId, optionId) : une variante ne peut JAMAIS
+//   référencer une valeur d'option d'un autre produit, même en SQL direct.
+//
+// Montants : Int en unité mineure (max 2 147 483 647 ≈ 2,1 Md XAF / 21 M EUR
+// par ligne — largement suffisant, documenté). Jamais de Float/Decimal.
+// ============================================================================
+
+model ProductCategory {
+  id             String                @id @default(cuid())
+  organizationId String
+  shopId         String
+  name           String
+  slug           String
+  description    String?
+  imageUrl       String?
+  status         ProductCategoryStatus @default(ACTIVE)
+  sortOrder      Int                   @default(0)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  archivedAt     DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  products     Product[]
+
+  // Index unique supplémentaire en SQL brut : nom unique insensible à la
+  // casse par Shop (hors ARCHIVED) — inexprimable en Prisma.
+  @@unique([shopId, slug])
+  @@unique([id, shopId])
+  @@index([organizationId, shopId, status])
+  @@map("product_categories")
+}
+
+// AUCUN prix, SKU, stock ni hasVariants ici (décision validée) : la
+// ProductVariant est l'unique source de vérité — un produit "simple" possède
+// une variante isDefault masquée par le frontend. La devise est héritée de la
+// Shop à la création et partagée par toutes les variantes.
+model Product {
+  id               String        @id @default(cuid())
+  organizationId   String
+  shopId           String
+  categoryId       String?
+  name             String
+  slug             String
+  description      String?
+  shortDescription String?
+  status           ProductStatus @default(DRAFT)
+  productType      ProductType   @default(PHYSICAL)
+  currency         String
+  featured         Boolean       @default(false)
+  createdByUserId  String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  archivedAt       DateTime?
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop             @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  // NoAction (contrôle en fin de statement) : la suppression physique n'existe
+  // que via la cascade Shop/Organization (test/dev), où produits et catégories
+  // partent ensemble. L'archivage d'une catégorie CONSERVE categoryId
+  // (historique, décision validée) — jamais de mise à null.
+  category     ProductCategory? @relation(fields: [categoryId, shopId], references: [id, shopId], onDelete: NoAction, onUpdate: NoAction)
+  createdBy    User?            @relation("ProductCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  variants     ProductVariant[]
+  options      ProductOption[]
+  images       ProductImage[]
+  cartItems    CartItem[]
+  orderItems   OrderItem[]      @relation("OrderItemProduct")
+
+  @@unique([shopId, slug])
+  @@unique([id, shopId])
+  @@index([organizationId, shopId, status])
+  @@index([shopId, categoryId])
+  @@map("products")
+}
+
+// Unique offre vendable. SKU/barcode stockés NORMALISÉS (trim + majuscules) :
+// l'unicité par Shop est donc insensible à la casse par construction.
+// combinationKey : représentation CANONIQUE de la combinaison d'options,
+// fondée sur les noms/valeurs normalisés triés (jamais des ids techniques) —
+// ex. [["couleur","rouge"],["taille","m"]] sérialisé ; 'DEFAULT' sans options.
+// Index uniques partiels en SQL brut : une seule variante par défaut non
+// archivée par produit ; une combinaison vivante unique par produit.
+model ProductVariant {
+  id                  String               @id @default(cuid())
+  organizationId      String
+  shopId              String
+  productId           String
+  name                String?
+  sku                 String
+  barcode             String?
+  status              ProductVariantStatus @default(ACTIVE)
+  priceMinor          Int
+  compareAtPriceMinor Int?
+  costPriceMinor      Int? // JAMAIS exposé aux rôles sans products.update (DTO dédiés)
+  trackInventory      Boolean              @default(true)
+  allowBackorder      Boolean              @default(false)
+  weightGrams         Int?
+  sortOrder           Int                  @default(0)
+  isDefault           Boolean              @default(false)
+  combinationKey      String
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  archivedAt          DateTime?
+
+  organization Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop                        @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  product      Product                     @relation(fields: [productId, shopId], references: [id, shopId], onDelete: Cascade)
+  optionValues ProductVariantOptionValue[]
+  inventory    InventoryItem?
+  movements    InventoryMovement[]
+  images       ProductImage[]
+  cartItems         CartItem[]
+  stockReservations StockReservation[]
+  orderItems        OrderItem[]        @relation("OrderItemVariant")
+
+  @@unique([shopId, sku])
+  @@unique([shopId, barcode]) // NULLs distincts en PostgreSQL : barcode optionnel
+  @@unique([id, shopId])
+  @@unique([id, productId])
+  @@index([productId, status])
+  @@map("product_variants")
+}
+
+model ProductOption {
+  id             String   @id @default(cuid())
+  organizationId String
+  shopId         String
+  productId      String
+  name           String // "Taille", "Couleur" — normalisé trim, unicité par produit
+  position       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop                 @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  product      Product              @relation(fields: [productId, shopId], references: [id, shopId], onDelete: Cascade)
+  values       ProductOptionValue[]
+  variantLinks ProductVariantOptionValue[]
+
+  @@unique([productId, name])
+  @@unique([id, productId])
+  @@map("product_options")
+}
+
+model ProductOptionValue {
+  id        String   @id @default(cuid())
+  optionId  String
+  value     String // "M", "Rouge" — trim, unicité par option
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  option       ProductOption               @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  variantLinks ProductVariantOptionValue[]
+
+  @@unique([optionId, value])
+  @@unique([id, optionId])
+  @@map("product_option_values")
+}
+
+// Liaison variante ↔ valeur d'option. Les trois FK composites chaînées
+// garantissent EN BASE que la valeur appartient à une option DU MÊME PRODUIT
+// que la variante (test SQL direct cross-product exigé). @@unique(variantId,
+// optionId) : une variante ne choisit qu'UNE valeur par option.
+model ProductVariantOptionValue {
+  variantId     String
+  optionValueId String
+  optionId      String
+  productId     String
+  createdAt     DateTime @default(now())
+
+  variant     ProductVariant     @relation(fields: [variantId, productId], references: [id, productId], onDelete: Cascade)
+  option      ProductOption      @relation(fields: [optionId, productId], references: [id, productId], onDelete: Cascade)
+  optionValue ProductOptionValue @relation(fields: [optionValueId, optionId], references: [id, optionId], onDelete: Cascade)
+
+  @@id([variantId, optionValueId])
+  @@unique([variantId, optionId])
+  @@map("product_variant_option_values")
+}
+
+// Galerie par URLs (aucun upload dans cette phase — l'architecture est prête
+// à remplacer la saisie d'URL par un provider média sans changer la table).
+// Index unique partiel en SQL brut : une seule image principale par produit.
+// La FK (variantId, productId) garantit qu'une image liée à une variante
+// appartient au même produit.
+model ProductImage {
+  id             String   @id @default(cuid())
+  organizationId String
+  shopId         String
+  productId      String
+  variantId      String?
+  url            String
+  altText        String?
+  position       Int      @default(0)
+  isPrimary      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop            @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  product      Product         @relation(fields: [productId, shopId], references: [id, shopId], onDelete: Cascade)
+  // NoAction : une variante n'est jamais supprimée physiquement hors cascade
+  // produit/shop, où l'image part de toute façon avec le produit.
+  variant      ProductVariant? @relation(fields: [variantId, productId], references: [id, productId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([productId, position])
+  @@map("product_images")
+}
+
+// Stock : 1:1 avec la variante, uniquement si trackInventory=true (jamais
+// pour SERVICE/DIGITAL — refusé par le service). quantityAvailable = onHand −
+// reserved, TOUJOURS calculé, jamais stocké. quantityOnHand ne peut JAMAIS
+// être négatif (CHECK SQL), même avec backorder : c'est quantityReserved qui
+// peut dépasser onHand quand allowBackorder=true (available négatif →
+// BACKORDERED). `version` = verrou optimiste des ADJUSTMENT (quantité cible) ;
+// les deltas (RESTOCK/DAMAGE) passent par un UPDATE SQL atomique conditionnel.
+model InventoryItem {
+  id                String   @id @default(cuid())
+  organizationId    String
+  shopId            String
+  variantId         String   @unique
+  quantityOnHand    Int      @default(0)
+  quantityReserved  Int      @default(0) // préparé pour les paniers/commandes
+  lowStockThreshold Int      @default(5)
+  version           Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop           @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  variant      ProductVariant @relation(fields: [variantId, shopId], references: [id, shopId], onDelete: Cascade)
+
+  @@unique([variantId, shopId])
+  @@index([organizationId, shopId])
+  @@map("inventory_items")
+}
+
+// Historique IMMUABLE : append-only par construction (aucun endpoint ni code
+// de mutation/suppression). quantityDelta = delta RÉELLEMENT appliqué, signé :
+// RESTOCK positif, DAMAGE négatif, ADJUSTMENT = after − before. Toujours créé
+// dans la MÊME transaction que la modification d'InventoryItem. L'audit
+// organisationnel (INVENTORY_ADJUSTED) reste synthétique — le détail vit ici.
+//
+// DEUX COMPTEURS, DEUX FAMILLES DE COLONNES (décision validée — jamais de
+// détournement) : quantityBefore/After/Delta décrivent TOUJOURS quantityOnHand.
+// Les mouvements RESERVATION/RELEASE ne touchent que quantityReserved :
+// quantityDelta = 0, before = after (onHand inchangé), et le changement réel
+// est porté par quantityReservedBefore/After (CHECK SQL). Le futur SALE
+// décrémentera les deux compteurs dans une seule ligne.
+model InventoryMovement {
+  id                     String                @id @default(cuid())
+  organizationId         String
+  shopId                 String
+  variantId              String
+  type                   InventoryMovementType
+  quantityDelta          Int
+  quantityBefore         Int
+  quantityAfter          Int
+  quantityReservedBefore Int?
+  quantityReservedAfter  Int?
+  reason         String? // obligatoire pour ADJUSTMENT et DAMAGE (service)
+  referenceType  String? // futur : "ORDER", "CART"
+  referenceId    String?
+  actorUserId    String?
+  createdAt      DateTime              @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop           @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  variant      ProductVariant @relation(fields: [variantId, shopId], references: [id, shopId], onDelete: Cascade)
+  actor        User?          @relation("InventoryMovementActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([variantId, createdAt(sort: Desc)])
+  @@index([organizationId, shopId])
+  @@map("inventory_movements")
+}
+
+// ============================================================================
+// Module Panier conversationnel (Cart + StockReservation + Checkout)
+//
+// Cohérence EN BASE par FK composites (pattern validé) : un Cart ne peut
+// relier qu'une Conversation et un Contact de SA Shop ; une ligne ne peut
+// relier qu'une variante de son produit, un produit de sa Shop, un panier de
+// sa Shop ; une réservation ne peut relier qu'une ligne de SON panier.
+// Testé par écritures SQL directes.
+// ============================================================================
+
+// Statuts (5, décision validée — pas de RESERVED : l'état de réservation vit
+// dans les lignes StockReservation + CheckoutSession) :
+//   ACTIVE → CHECKOUT_STARTED | ABANDONED | EXPIRED
+//   CHECKOUT_STARTED → ACTIVE (annulation ou expiration des réservations)
+//                    → CONVERTED (phase Order) | ABANDONED | EXPIRED
+//   CONVERTED / ABANDONED / EXPIRED : terminaux.
+// Index unique partiel en SQL brut : UN SEUL panier ouvert par Conversation.
+// Totaux TOUJOURS recalculés serveur (jamais acceptés du body — CHECK >= 0).
+// `version` : verrou optimiste (expectedVersion → 409 CART_CONCURRENCY),
+// incrémentée à chaque mutation.
+model Cart {
+  id                String     @id @default(cuid())
+  organizationId    String
+  shopId            String
+  contactId         String
+  conversationId    String
+  status            CartStatus @default(ACTIVE)
+  currency          String
+  subtotalMinor     Int        @default(0)
+  discountMinor     Int        @default(0) // 0 dans cette phase
+  deliveryFeeMinor  Int        @default(0) // 0 tant qu'aucune méthode réelle
+  totalMinor        Int        @default(0)
+  itemCount         Int        @default(0)
+  version           Int        @default(0)
+  lastActivityAt    DateTime   @default(now()) // mutations réelles uniquement, jamais GET
+  expiresAt         DateTime? // = lastActivityAt + CART_INACTIVITY_TTL (sweep)
+  checkoutStartedAt DateTime?
+  convertedAt       DateTime?
+  abandonedAt       DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop               @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  contact      Contact            @relation(fields: [contactId, shopId], references: [id, shopId], onDelete: Cascade)
+  conversation Conversation       @relation(fields: [conversationId, shopId], references: [id, shopId], onDelete: Cascade)
+  items        CartItem[]
+  checkout     CheckoutSession?
+  reservations StockReservation[]
+  order        Order?
+
+  @@unique([id, shopId])
+  @@index([organizationId, shopId, status])
+  @@index([status, expiresAt])
+  @@map("carts")
+}
+
+// Snapshot descriptif + prix figés à l'ajout (option C validée) : le panier
+// reste affichable même si le produit change ensuite. availabilityStatus =
+// dernier résultat de revalidation (VALID | PRICE_CHANGED | OUT_OF_STOCK |
+// QUANTITY_REDUCED_REQUIRED | PRODUCT_UNAVAILABLE | VARIANT_UNAVAILABLE) ;
+// un PRICE_CHANGED n'est JAMAIS résolu silencieusement (action explicite
+// accept-current-price). `version` : verrou optimiste par ligne.
+model CartItem {
+  id                   String   @id @default(cuid())
+  organizationId       String
+  shopId               String
+  cartId               String
+  productId            String
+  variantId            String
+  quantity             Int // 1..999 (DTO) + CHECK > 0
+  unitPriceMinor       Int
+  compareAtPriceMinor  Int?
+  lineSubtotalMinor    Int // unitPriceMinor × quantity, recalculé serveur
+  productNameSnapshot  String
+  variantNameSnapshot  String?
+  skuSnapshot          String
+  imageUrlSnapshot     String?
+  optionValuesSnapshot Json? // [["Taille","M"],["Couleur","Rouge"]] borné
+  availabilityStatus   String   @default("VALID")
+  currentPriceMinor    Int? // prix catalogue à la dernière revalidation (affichage de l'écart)
+  version              Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  cart         Cart               @relation(fields: [cartId, shopId], references: [id, shopId], onDelete: Cascade)
+  product      Product            @relation(fields: [productId, shopId], references: [id, shopId], onDelete: NoAction, onUpdate: NoAction)
+  variant      ProductVariant     @relation(fields: [variantId, productId], references: [id, productId], onDelete: NoAction, onUpdate: NoAction)
+  reservations StockReservation[]
+
+  @@unique([cartId, variantId]) // une Variant au plus une fois par Cart
+  @@unique([id, cartId])
+  @@index([variantId])
+  @@map("cart_items")
+}
+
+// Une ligne = UN CYCLE de réservation (décision validée) : chaque nouveau
+// cycle après release/expiration crée une NOUVELLE ligne — une réservation
+// historique n'est jamais réutilisée. Une seule ACTIVE par CartItem, garantie
+// par index unique partiel SQL brut (WHERE status = 'ACTIVE').
+// Réservations pilotées EXCLUSIVEMENT par les services Cart/Checkout et le
+// sweep du worker — aucune route publique de création/modification.
+model StockReservation {
+  id             String                 @id @default(cuid())
+  organizationId String
+  shopId         String
+  cartId         String
+  cartItemId     String
+  variantId      String
+  quantity       Int // > 0 (CHECK)
+  status         StockReservationStatus @default(ACTIVE)
+  expiresAt      DateTime
+  // Renouvellement contrôlé : min RENEWAL_MIN_INTERVAL entre deux, jamais
+  // au-delà de maxExpiresAt (durée de vie cumulée, figée à la création).
+  renewedCount   Int                    @default(0)
+  lastRenewedAt  DateTime?
+  maxExpiresAt   DateTime
+  releasedAt     DateTime?
+  consumedAt     DateTime?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  cart         Cart           @relation(fields: [cartId, shopId], references: [id, shopId], onDelete: Cascade)
+  cartItem     CartItem       @relation(fields: [cartItemId, cartId], references: [id, cartId], onDelete: Cascade)
+  variant      ProductVariant @relation(fields: [variantId, shopId], references: [id, shopId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([status, expiresAt]) // sweep d'expiration
+  @@index([variantId, status])
+  @@index([cartId])
+  @@map("stock_reservations")
+}
+
+// 1:1 Cart. `confirmationSnapshot` : JSON IMMUABLE produit UNE SEULE FOIS au
+// passage à CONFIRMED — contrat d'entrée de la future conversion en Order.
+// Après CONFIRMED : session et panier non modifiables ; les réservations sont
+// conservées jusqu'à conversion ou expiration (une expiration rend le
+// snapshot non convertible sans nouveau cycle réservation + confirmation).
+model CheckoutSession {
+  id                   String            @id @default(cuid())
+  organizationId       String
+  shopId               String
+  cartId               String            @unique
+  status               CheckoutStatus    @default(COLLECTING_INFORMATION)
+  customerName         String?
+  customerPhone        String // prérempli depuis le Contact, modifications explicites
+  customerEmail        String?
+  fulfillmentType      FulfillmentType?
+  addressLine1         String?
+  addressLine2         String?
+  city                 String?
+  region               String?
+  postalCode           String? // JAMAIS obligatoire (Cameroun)
+  countryCode          String?
+  landmark             String?
+  deliveryInstructions String?
+  paymentPreference    PaymentPreference @default(UNDECIDED)
+  confirmationSnapshot Json?
+  version              Int               @default(0)
+  completedAt          DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  cart         Cart         @relation(fields: [cartId, shopId], references: [id, shopId], onDelete: Cascade)
+  order        Order?
+
+  @@unique([cartId, shopId]) // support du 1:1 sur la FK composite
+  @@index([organizationId, shopId, status])
+  @@map("checkout_sessions")
+}
+
+// Idempotence ciblée par clientMutationId (ajout, quantité, start, confirm,
+// abandon) : l'insertion dans la MÊME transaction que la mutation déduplique
+// les retries réseau (P2002 → renvoyer l'état courant, aucun double effet).
+// Purgée par le sweep (lignes > 24 h).
+model CartMutation {
+  id               String   @id @default(cuid())
+  organizationId   String
+  conversationId   String
+  clientMutationId String
+  createdAt        DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, clientMutationId])
+  @@index([createdAt])
+  @@map("cart_mutations")
+}
+
+// ============================================================================
+// Module Orders — document commercial HISTORIQUE, indépendant du catalogue
+// courant. Toutes les données commerciales viennent du confirmationSnapshot
+// du CheckoutSession (jamais du frontend, jamais du catalogue vivant).
+//
+// Idempotence STRUCTURELLE de la conversion : cartId ET checkoutSessionId
+// uniques — une seule Order par Cart et par CheckoutSession, garanti en base.
+// ============================================================================
+
+model Order {
+  id                String                 @id @default(cuid())
+  organizationId    String
+  shopId            String
+  contactId         String
+  conversationId    String
+  cartId            String                 @unique
+  checkoutSessionId String                 @unique
+  // PREFIX-YYYY-NNNNNN — séquence par (Shop, année), unicité par organisation.
+  orderNumber       String
+  status            OrderStatus            @default(CONFIRMED)
+  paymentStatus     OrderPaymentStatus     @default(UNPAID)
+  fulfillmentStatus OrderFulfillmentStatus @default(PENDING)
+  fulfillmentType   FulfillmentType
+  currency          String
+  subtotalMinor     Int
+  discountMinor     Int                    @default(0)
+  deliveryFeeMinor  Int                    @default(0)
+  totalMinor        Int
+  itemCount         Int
+
+  customerName         String
+  customerPhone        String
+  customerEmail        String?
+  addressLine1         String?
+  addressLine2         String?
+  city                 String?
+  region               String?
+  postalCode           String?
+  countryCode          String?
+  landmark             String?
+  deliveryInstructions String?
+  paymentPreference    PaymentPreference
+  customerNote         String?
+  cancellationReason   String?
+
+  // Jalons — posés UNE seule fois par le service de transition.
+  confirmedAt  DateTime
+  processingAt DateTime?
+  readyAt      DateTime?
+  shippedAt    DateTime?
+  deliveredAt  DateTime?
+  cancelledAt  DateTime?
+
+  createdByUserId String?
+  version         Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  // NoAction : la suppression d'un Contact/Conversation/Cart/Session ne doit
+  // JAMAIS emporter une commande ; les cascades org/shop (test/dev) suppriment
+  // orders dans le même statement, donc ne sont pas bloquées.
+  contact         Contact         @relation(fields: [contactId, shopId], references: [id, shopId], onDelete: NoAction, onUpdate: NoAction)
+  conversation    Conversation    @relation(fields: [conversationId, shopId], references: [id, shopId], onDelete: NoAction, onUpdate: NoAction)
+  cart            Cart            @relation(fields: [cartId, shopId], references: [id, shopId], onDelete: NoAction, onUpdate: NoAction)
+  checkoutSession CheckoutSession @relation(fields: [checkoutSessionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdBy       User?           @relation("OrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  items         OrderItem[]
+  statusHistory OrderStatusHistory[]
+  notes         OrderNote[]
+  mutations     OrderMutation[]
+
+  @@unique([organizationId, orderNumber])
+  @@unique([id, shopId]) // cible des FK composites des enfants
+  @@unique([cartId, shopId]) // support de la FK composite vers carts
+  @@index([organizationId, shopId, status])
+  @@index([organizationId, createdAt(sort: Desc)])
+  @@index([organizationId, totalMinor])
+  @@index([contactId])
+  @@index([conversationId])
+  @@map("orders")
+}
+
+// Snapshot DÉFINITIF — jamais recalculé depuis Product/ProductVariant.
+// productId/variantId : références historiques SANS autorité d'affichage,
+// FK simple-colonne SetNull (une suppression physique en test/dev met la
+// référence à null, shopId et snapshots INTACTS — testé par SQL direct).
+// stockConsumedQuantity / backorderedQuantity / stockRestoredQuantity :
+// traçabilité de ce qui est RÉELLEMENT sorti/revenu du stock (validé —
+// ajustements 8 et 11) ; l'annulation se base sur ces valeurs historiques,
+// jamais sur trackInventory courant. Aucune route UPDATE/DELETE.
+model OrderItem {
+  id                     String      @id @default(cuid())
+  organizationId         String
+  shopId                 String
+  orderId                String
+  productId              String?
+  variantId              String?
+  productName            String
+  variantName            String?
+  sku                    String
+  imageUrl               String?
+  optionValuesSnapshot   Json?
+  productTypeSnapshot    ProductType
+  trackInventorySnapshot Boolean
+  allowBackorderSnapshot Boolean     @default(false)
+  quantity               Int
+  unitPriceMinor         Int
+  compareAtPriceMinor    Int?
+  lineSubtotalMinor      Int
+  currency               String
+  // consommé + backorder = quantity pour une ligne suivie (CHECK SQL) ;
+  // 0/0 pour une ligne non suivie. restored ≤ consumed (CHECK SQL).
+  stockConsumedQuantity  Int         @default(0)
+  backorderedQuantity    Int         @default(0)
+  stockRestoredQuantity  Int         @default(0)
+  createdAt              DateTime    @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order        Order           @relation(fields: [orderId, shopId], references: [id, shopId], onDelete: Cascade)
+  product      Product?        @relation("OrderItemProduct", fields: [productId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  variant      ProductVariant? @relation("OrderItemVariant", fields: [variantId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([orderId])
+  @@index([variantId])
+  @@map("order_items")
+}
+
+// Compteur transactionnel par (Shop, année) — UPSERT atomique
+// `INSERT … ON CONFLICT (shopId, year) DO UPDATE SET lastValue = +1 RETURNING`
+// DANS la transaction de conversion : un rollback annule l'incrément (aucun
+// trou lié au rollback, contrairement à une séquence nextval PostgreSQL) ;
+// deux conversions concurrentes sérialisent sur la ligne, jamais de doublon.
+model OrderSequence {
+  id             String   @id @default(cuid())
+  organizationId String
+  shopId         String
+  year           Int
+  lastValue      Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([shopId, year])
+  @@map("order_sequences")
+}
+
+// Historique IMMUABLE des statuts — une ligne par changement réel, portant
+// les avant/après des TROIS dimensions + la dimension modifiée (changeType).
+// Aucune route UPDATE/DELETE.
+model OrderStatusHistory {
+  id                        String                  @id @default(cuid())
+  organizationId            String
+  shopId                    String
+  orderId                   String
+  changeType                OrderStatusChangeType
+  previousStatus            OrderStatus?
+  newStatus                 OrderStatus
+  previousPaymentStatus     OrderPaymentStatus?
+  newPaymentStatus          OrderPaymentStatus
+  previousFulfillmentStatus OrderFulfillmentStatus?
+  newFulfillmentStatus      OrderFulfillmentStatus
+  reason                    String?
+  source                    OrderStatusSource
+  actorUserId               String?
+  createdAt                 DateTime                @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order        Order        @relation(fields: [orderId, shopId], references: [id, shopId], onDelete: Cascade)
+  actor        User?        @relation("OrderStatusHistoryActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@map("order_status_history")
+}
+
+// Notes internes append-only (décision validée D6) — JAMAIS envoyées au
+// client. Aucune route UPDATE/DELETE.
+model OrderNote {
+  id             String   @id @default(cuid())
+  organizationId String
+  shopId         String
+  orderId        String
+  authorUserId   String?
+  content        String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order        Order        @relation(fields: [orderId, shopId], references: [id, shopId], onDelete: Cascade)
+  author       User?        @relation("OrderNoteAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@map("order_notes")
+}
+
+// Idempotence des opérations POST-conversion (statut, annulation, note) —
+// mécanisme DÉDIÉ, distinct de CartMutation (validé — ajustement 16).
+// resultVersion : version de l'Order après l'opération, renvoyée au replay.
+model OrderMutation {
+  id               String   @id @default(cuid())
+  organizationId   String
+  orderId          String
+  clientMutationId String
+  type             String // 'STATUS' | 'CANCEL' | 'NOTE'
+  resultVersion    Int
+  createdAt        DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, clientMutationId])
+  @@index([createdAt])
+  @@map("order_mutations")
+}
+
+// Transactional outbox — créé dans la MÊME transaction que le Message
+// PENDING. Le publisher post-commit publie vers BullMQ puis marque PUBLISHED ;
+// si Redis est indisponible, le sweep périodique republie les PENDING
+// (jobId stable = dispatchId → aucune double publication logique).
+model OutboxEvent {
+  id               String            @id @default(cuid())
+  organizationId   String
+  eventType        OutboxEventType
+  payload          Json
+  status           OutboxEventStatus @default(PENDING)
+  attemptCount     Int               @default(0)
+  lastErrorMessage String?
+  publishedAt      DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([organizationId])
+  @@map("outbox_events")
+}
+
+// ============================================================================
+// IA CONVERSATIONNELLE (sous-phase B — SUGGEST_ONLY)
+// ============================================================================
+
+enum AiProviderType {
+  MOCK
+  GEMINI
+}
+
+// Ordre de priorité validé : AI_MODE=DISABLED (env) est un coupe-circuit
+// GLOBAL ; sinon AiConfiguration.mode fait autorité ; sinon AI_MODE sert de
+// défaut. AUTO_REPLY reste désactivé par défaut (sous-phase C).
+enum AiMode {
+  DISABLED
+  SUGGEST_ONLY
+  AUTO_REPLY
+}
+
+// SUPERSEDED (ajustement 9 validé) : un run DÉJÀ démarré n'est jamais
+// supprimé quand un message plus récent arrive — il est marqué et relié au
+// run qui le remplace. SKIPPED = jamais démarré (conditions non réunies).
+enum AiRunStatus {
+  QUEUED
+  RUNNING
+  WAITING_TOOL
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  SKIPPED
+  SUPERSEDED
+}
+
+enum AiSuggestionStatus {
+  PENDING
+  ACCEPTED
+  EDITED_AND_ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+// La trace est créée AVANT l'exécution (PENDING) puis suit le cycle. REJECTED =
+// appel refusé AVANT toute exécution (validation Zod, id étranger, outil non
+// déclaré) — à distinguer d'un outil exécuté qui échoue (FAILED).
+enum AiToolCallStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  REJECTED
+}
+
+enum ConversationHandoffStatus {
+  REQUESTED
+  ACCEPTED
+  RESOLVED
+  CANCELLED
+}
+
+// Une configuration par Shop (D8/décision validée). AUCUNE clé API stockée :
+// les secrets vivent uniquement dans l'environnement. `model` nullable =
+// hérite de GEMINI_MODEL (aucun nom de modèle codé en dur nulle part).
+model AiConfiguration {
+  id                  String         @id @default(cuid())
+  organizationId      String
+  shopId              String         @unique
+  provider            AiProviderType @default(MOCK)
+  mode                AiMode         @default(DISABLED)
+  model               String?
+  systemPromptOverride String?
+  maxOutputTokens     Int            @default(300)
+  contextMaxMessages  Int            @default(20)
+  toolMaxRounds       Int            @default(4)
+  // AUTO_REPLY exige CE drapeau ET mode=AUTO_REPLY : deux verrous distincts,
+  // activables uniquement par OWNER/ADMIN (sous-phase C).
+  autoReplyEnabled    Boolean        @default(false)
+  humanHandoffEnabled Boolean        @default(true)
+  version             Int            @default(0)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  // `shopId @unique` impose UNE configuration par Shop ; ce @@unique est exigé
+  // par Prisma comme côté défini de la relation 1-1 via la FK composite.
+  @@unique([shopId, organizationId])
+  @@index([organizationId])
+  @@map("ai_configurations")
+}
+
+// Un run = un traitement IA déclenché par UN message entrant.
+// `triggerMessageId` est UNIQUE (ajustement 14 validé : Message.id étant déjà
+// globalement unique, cette seule contrainte garantit qu'un même message ne
+// produit jamais deux runs logiques — inutile de la composer avec le tenant).
+model AiRun {
+  id                String         @id @default(cuid())
+  organizationId    String
+  shopId            String
+  conversationId    String
+  triggerMessageId  String         @unique
+  // Ancre de contexte enregistrée DÈS le run (ajustement 10) : au démarrage,
+  // le déclencheur est le dernier message vu. La publication d'une suggestion
+  // (groupe suivant) comparera cette ancre à l'état courant pour détecter
+  // qu'un nouveau message client ou une réponse humaine l'a rendue obsolète.
+  contextLastMessageId String
+  provider          AiProviderType
+  // `model` = modèle effectif figé au run (compat). `requestedModel` = ce qui a
+  // été demandé (config Shop ou env, ex. alias `gemini-flash-lite-latest`) ;
+  // `resolvedModel` = modèle RÉELLEMENT servi, rapporté par le fournisseur
+  // (`modelVersion`) à la génération. Un alias n'est jamais réécrit
+  // automatiquement — ces colonnes tracent la résolution, sans la forcer.
+  model             String
+  requestedModel    String?
+  resolvedModel     String?
+  mode              AiMode
+  // Version du prompt système ayant produit ce run (jamais le prompt complet —
+  // ajustement 11). Nullable : additif, renseigné à la génération.
+  promptVersion     String?
+  status            AiRunStatus    @default(QUEUED)
+  inputTokens       Int?
+  outputTokens      Int?
+  totalTokens       Int?
+  latencyMs         Int?
+  toolRounds        Int            @default(0)
+  // Code + message FILTRÉS (jamais de payload fournisseur, de prompt système
+  // complet ni de clé API).
+  errorCode         String?
+  errorMessage      String?
+  supersededByRunId String?
+  createdAt         DateTime       @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop           Shop            @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  conversation   Conversation    @relation(fields: [conversationId, shopId], references: [id, shopId], onDelete: Cascade)
+  triggerMessage     Message     @relation("AiRunTriggerMessage", fields: [triggerMessageId], references: [id], onDelete: Cascade)
+  contextLastMessage Message     @relation("AiRunContextMessage", fields: [contextLastMessageId], references: [id], onDelete: Cascade)
+  supersededBy   AiRun?          @relation("AiRunSuperseded", fields: [supersededByRunId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  supersedes     AiRun[]         @relation("AiRunSuperseded")
+  suggestion     AiSuggestion?
+  toolCalls      AiToolCall[]
+  handoffs       ConversationHandoff[]
+
+  @@index([organizationId, shopId, status])
+  @@index([conversationId, createdAt])
+  @@map("ai_runs")
+}
+
+// Une suggestion par run au maximum. `contextLastMessageId` (ajustement 15
+// validé) fige le dernier message vu par le modèle : si la conversation a
+// avancé depuis, l'acceptation exige une confirmation supplémentaire
+// (409 AI_SUGGESTION_STALE sans acknowledgeStale) — jamais d'envoi d'une
+// réponse écrite pour un contexte périmé.
+model AiSuggestion {
+  id                   String             @id @default(cuid())
+  aiRunId              String             @unique
+  organizationId       String
+  shopId               String
+  conversationId       String
+  content              String
+  editedContent        String?
+  status               AiSuggestionStatus @default(PENDING)
+  // Verrou optimiste : chaque acceptation/rejet exige la version attendue et
+  // l'incrémente — deux acceptations concurrentes ne réussissent jamais toutes.
+  version              Int                @default(0)
+  contextLastMessageId String
+  acceptedByUserId     String?
+  rejectedByUserId     String?
+  // Raison de rejet bornée (jamais le texte complet de la suggestion).
+  rejectReason         String?
+  // Message sortant réellement créé à l'acceptation — trace du lien
+  // suggestion → envoi, sans lequel l'audit ne peut pas être reconstitué.
+  sentMessageId        String?
+  acceptedAt           DateTime?
+  rejectedAt           DateTime?
+  expiresAt            DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  aiRun              AiRun        @relation(fields: [aiRunId], references: [id], onDelete: Cascade)
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop               Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  conversation       Conversation @relation(fields: [conversationId, shopId], references: [id, shopId], onDelete: Cascade)
+  contextLastMessage Message      @relation("AiSuggestionContextMessage", fields: [contextLastMessageId], references: [id], onDelete: Cascade)
+  acceptedBy         User?        @relation("AiSuggestionAcceptedBy", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+  rejectedBy         User?        @relation("AiSuggestionRejectedBy", fields: [rejectedByUserId], references: [id], onDelete: SetNull)
+  sentMessage        Message?     @relation("AiSuggestionSentMessage", fields: [sentMessageId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, status, createdAt])
+  @@index([organizationId, shopId, status])
+  @@map("ai_suggestions")
+}
+
+// Journal opérationnel détaillé des appels d'outils. `argumentsFiltered` et
+// `resultSummaryFiltered` sont BORNÉS et filtrés : jamais de coût produit, de
+// note interne, de secret ni de donnée d'un autre tenant.
+model AiToolCall {
+  id                    String           @id @default(cuid())
+  aiRunId               String
+  organizationId        String
+  shopId                String
+  toolName              String
+  round                 Int
+  // Ordre global déterministe de l'appel dans le run (0,1,2…) — reconstitue la
+  // séquence exacte même si plusieurs outils sont appelés dans un même round.
+  sequence              Int              @default(0)
+  argumentsFiltered     Json
+  resultSummaryFiltered Json?
+  status                AiToolCallStatus
+  latencyMs             Int?
+  errorCode             String?
+  createdAt             DateTime         @default(now())
+
+  aiRun        AiRun        @relation(fields: [aiRunId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@index([aiRunId, round])
+  @@index([organizationId, shopId, toolName])
+  @@map("ai_tool_calls")
+}
+
+// Source de vérité du transfert vers un humain (ajustement 8 validé) : la
+// priorité HIGH et la note interne restent de simples effets secondaires.
+// Un seul handoff vivant (REQUESTED/ACCEPTED) par conversation — garanti par
+// un index unique partiel SQL brut (inexprimable dans schema.prisma).
+model ConversationHandoff {
+  id                     String                    @id @default(cuid())
+  organizationId         String
+  shopId                 String
+  conversationId         String
+  aiRunId                String?
+  status                 ConversationHandoffStatus @default(REQUESTED)
+  reason                 String
+  summary                String?
+  acceptedByMembershipId String?
+  requestedAt            DateTime                  @default(now())
+  acceptedAt             DateTime?
+  resolvedAt             DateTime?
+  cancelledAt            DateTime?
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId, shopId], references: [id, shopId], onDelete: Cascade)
+  aiRun        AiRun?       @relation(fields: [aiRunId], references: [id], onDelete: SetNull)
+  acceptedBy   Membership?  @relation("ConversationHandoffAcceptedBy", fields: [acceptedByMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, status])
+  @@index([organizationId, shopId, status, requestedAt])
+  @@map("conversation_handoffs")
+}

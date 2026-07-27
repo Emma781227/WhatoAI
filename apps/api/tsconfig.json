@@ -1,0 +1,9 @@
+{
+  "extends": "@whauto/tsconfig/nestjs.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "incremental": true
+  },
+  "include": ["src"]
+}

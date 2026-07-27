@@ -1,0 +1,33 @@
+{
+  "name": "whauto-ai",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:generate": "pnpm --filter @whauto/database db:generate",
+    "db:migrate": "pnpm --filter @whauto/database db:migrate",
+    "db:deploy": "pnpm --filter @whauto/database db:deploy",
+    "db:studio": "pnpm --filter @whauto/database db:studio",
+    "db:seed": "pnpm --filter @whauto/database db:seed",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.2"
+  }
+}
