@@ -107,6 +107,16 @@ enum OrganizationAuditEventType {
   AI_SUGGESTION_REJECTED
   AI_SUGGESTION_REGENERATED
   AI_HANDOFF_REQUESTED
+  // Sous-phase C (AUTO_REPLY). SENT = réponse envoyée automatiquement par l'IA ;
+  // ESCALATED = l'IA a préféré transférer à un humain ; SUPPRESSED = envoi
+  // bloqué par un garde-fou (fenêtre 24 h, plafond, anti-monologue…) sans
+  // escalade. PAUSED/RESUMED = un humain a suspendu/réactivé l'auto-réponse sur
+  // une conversation. Jamais le texte du message en metadata.
+  AI_AUTO_REPLY_SENT
+  AI_AUTO_REPLY_ESCALATED
+  AI_AUTO_REPLY_SUPPRESSED
+  AI_AUTO_REPLY_PAUSED
+  AI_AUTO_REPLY_RESUMED
 }
 
 // ============================================================================
@@ -828,6 +838,11 @@ model Conversation {
   contactId                      String
   status                         ConversationStatus   @default(OPEN)
   mode                           ConversationMode     @default(HUMAN)
+  // Sous-phase C : un humain peut suspendre l'auto-réponse sur CETTE conversation
+  // sans changer la config Shop. Indépendant de `mode` : une réponse manuelle
+  // rebascule `mode` en HUMAN (suspension implicite), ce drapeau couvre la
+  // suspension EXPLICITE (bouton) tout en gardant la conversation en mode AI.
+  aiAutoReplyPaused              Boolean              @default(false)
   priority                       ConversationPriority @default(NORMAL)
   assignedMembershipId           String?
   lastMessageAt                  DateTime             @default(now())
@@ -885,6 +900,14 @@ model Message {
   errorCode         String?
   errorMessage      String?
 
+  // Sous-phase C : marque un message OUTBOUND émis automatiquement par l'IA.
+  // `aiGeneratedByRunId` relie le message au run qui l'a produit (SetNull : la
+  // suppression du run ne détruit pas le message envoyé). En SUGGEST_ONLY le
+  // lien suggestion → message passe par AiSuggestion.sentMessageId ; ici l'envoi
+  // est direct (sans suggestion), d'où ce lien dédié.
+  isAiGenerated      Boolean @default(false)
+  aiGeneratedByRunId String?
+
   // Suivi des tentatives d'envoi provider. dispatchId est stable pour un
   // cycle d'envoi donné (jobId BullMQ = dispatchId : une republication outbox
   // ne produit jamais un second envoi logique) ; un retry explicite d'un
@@ -915,6 +938,7 @@ model Message {
   aiRunsAsContext          AiRun[]        @relation("AiRunContextMessage")
   aiSuggestionsAsContext   AiSuggestion[] @relation("AiSuggestionContextMessage")
   aiSuggestionsAsSent      AiSuggestion[] @relation("AiSuggestionSentMessage")
+  aiGeneratedByRun         AiRun?         @relation("AiRunAutoReplyMessage", fields: [aiGeneratedByRunId], references: [id], onDelete: SetNull)
 
   // Idempotence inbound : PostgreSQL traite les NULL comme distincts, les
   // messages sans id externe (sortants pas encore envoyés) ne collisionnent pas.
@@ -1762,6 +1786,24 @@ enum ConversationHandoffStatus {
   CANCELLED
 }
 
+// Sous-phase C — quand l'IA a le droit de répondre automatiquement.
+// ALWAYS = 24/7 (dans la limite de la fenêtre 24 h Meta) ; OUTSIDE_BUSINESS_HOURS
+// = relais uniquement hors des horaires d'ouverture de la Shop (présence humaine
+// prioritaire). Le choix se fait par configuration, sans migration.
+enum AiAutoReplyScheduleMode {
+  ALWAYS
+  OUTSIDE_BUSINESS_HOURS
+}
+
+// Issue de la décision d'auto-réponse d'un run (nullable : un run SUGGEST_ONLY
+// n'en porte pas). SENT = message envoyé automatiquement ; ESCALATED = transfert
+// humain déclenché ; SUPPRESSED = envoi bloqué par un garde-fou sans escalade.
+enum AiAutoReplyDecision {
+  SENT
+  ESCALATED
+  SUPPRESSED
+}
+
 // Une configuration par Shop (D8/décision validée). AUCUNE clé API stockée :
 // les secrets vivent uniquement dans l'environnement. `model` nullable =
 // hérite de GEMINI_MODEL (aucun nom de modèle codé en dur nulle part).
@@ -1780,6 +1822,15 @@ model AiConfiguration {
   // activables uniquement par OWNER/ADMIN (sous-phase C).
   autoReplyEnabled    Boolean        @default(false)
   humanHandoffEnabled Boolean        @default(true)
+  // Garde-fous AUTO_REPLY (sous-phase C — aucun effet tant que le mode/le
+  // drapeau ne sont pas actifs). Le schedule pilote D4 (24/7 vs hors-horaires) ;
+  // le plafond borne le nombre de réponses auto par conversation et par jour
+  // (anti-boucle D2, l'anti-monologue reste dérivé de l'historique) ; la liste
+  // blanche restreint l'auto-envoi aux intentions jugées sûres (D3) — toute
+  // intention hors liste force l'escalade.
+  autoReplyScheduleMode            AiAutoReplyScheduleMode @default(ALWAYS)
+  autoReplyMaxPerConversationPerDay Int                    @default(5)
+  autoReplyAllowedCategories       String[]                @default(["PRODUCT_INFO", "AVAILABILITY", "OPENING_HOURS", "ORDER_STATUS"])
   version             Int            @default(0)
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
@@ -1828,6 +1879,12 @@ model AiRun {
   totalTokens       Int?
   latencyMs         Int?
   toolRounds        Int            @default(0)
+  // Sous-phase C : résultat de la décision d'auto-réponse (null en SUGGEST_ONLY).
+  // `autoReplySuppressionReason` = code court FILTRÉ (ex. WINDOW_CLOSED,
+  // RATE_LIMIT, ANTI_MONOLOGUE, LOW_CONFIDENCE, UNSOURCED_CLAIM,
+  // CATEGORY_NOT_ALLOWED) — jamais le texte du message.
+  autoReplyDecision          AiAutoReplyDecision?
+  autoReplySuppressionReason String?
   // Code + message FILTRÉS (jamais de payload fournisseur, de prompt système
   // complet ni de clé API).
   errorCode         String?
@@ -1847,6 +1904,7 @@ model AiRun {
   suggestion     AiSuggestion?
   toolCalls      AiToolCall[]
   handoffs       ConversationHandoff[]
+  autoReplyMessages Message[]    @relation("AiRunAutoReplyMessage")
 
   @@index([organizationId, shopId, status])
   @@index([conversationId, createdAt])
