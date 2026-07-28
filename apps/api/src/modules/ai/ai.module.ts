@@ -6,6 +6,7 @@ import { WhatsAppQueuesModule } from '../../queues/whatsapp-queues.module';
 import { AuthModule } from '../auth/auth.module';
 import { ConversationsModule } from '../conversations/conversations.module';
 import { OrganizationsModule } from '../organizations/organizations.module';
+import { WalletModule } from '../../wallet/wallet.module';
 import { AiAutoReplyService } from './ai-auto-reply.service';
 import { AiConfigurationService } from './ai-configuration.service';
 import { AiController } from './ai.controller';
@@ -18,7 +19,7 @@ import { AiSuggestionsService } from './ai-suggestions.service';
  * jamais d'appel direct au provider. AUTO_REPLY non activable fonctionnellement.
  */
 @Module({
-  imports: [AuthModule, OrganizationsModule, ConversationsModule, WhatsAppQueuesModule],
+  imports: [AuthModule, OrganizationsModule, ConversationsModule, WhatsAppQueuesModule, WalletModule],
   controllers: [AiController],
   providers: [
     AiConfigurationService,

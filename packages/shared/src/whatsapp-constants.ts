@@ -56,7 +56,31 @@ export const SOCKET_EVENTS = {
   AI_RUN_FAILED: 'ai.run.failed',
   AI_SUGGESTION_CREATED: 'ai.suggestion.created',
   AI_HANDOFF_REQUESTED: 'ai.handoff.requested',
+  // Wallet / crédits IA — RÉFÉRENCES + soldes agrégés uniquement (jamais de
+  // secret, de détail Gemini ni de ligne de ledger). `balance.updated` suit une
+  // réservation/un mouvement ; `insufficient` signale un solde trop bas pour un
+  // run IA. Le frontend refetch le Wallet autoritaire à réception.
+  WALLET_BALANCE_UPDATED: 'wallet.balance.updated',
+  WALLET_INSUFFICIENT: 'wallet.insufficient',
 } as const;
+
+/**
+ * Payload temps réel Wallet : soldes agrégés + drapeau dérivé `aiAvailable`
+ * (assez de crédits ET Wallet ACTIVE pour lancer un run). `conversationId` est
+ * optionnel (route le toast « solde insuffisant » vers la bonne conversation) —
+ * jamais un secret. Aucune ligne de ledger, aucun coût fournisseur.
+ */
+export interface WalletRealtimeEvent {
+  organizationId: string;
+  walletId: string;
+  balanceCredits: number;
+  reservedCredits: number;
+  availableCredits: number;
+  aiAvailable: boolean;
+  version: number;
+  conversationId?: string;
+  requiredCredits?: number;
+}
 
 /** Payload commun des événements IA : identifiants + statut, jamais de contenu. */
 export interface AiRealtimeEvent {

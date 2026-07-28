@@ -20,6 +20,7 @@
     "@whauto/config": "workspace:*",
     "@whauto/database": "workspace:*",
     "@whauto/shared": "workspace:*",
+    "@whauto/wallet": "workspace:*",
     "@whauto/whatsapp": "workspace:*",
     "bullmq": "^5.56.0",
     "ioredis": "^5.4.1",

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@whauto/database';
 import {
+  aiUsageReleaseKey,
   availableCredits,
   computeBalancesAfter,
   isTypeDirectionValid,
@@ -228,5 +229,60 @@ export class WalletService {
   /** Applique un mouvement dans sa propre transaction (mouvement isolé). */
   async creditWallet(movement: WalletMovementInput): Promise<WalletMovementResult> {
     return this.prisma.$transaction((tx) => this.applyMovementInTx(tx, movement));
+  }
+
+  /**
+   * Libère STRICTEMENT une fois le reliquat de réservation d'un run IA, DANS la
+   * transaction fournie (supersede manuel côté API — groupe 4). Miroir du worker :
+   * lit l'AiUsageEvent RESERVED, GATE la transition RESERVED→RELEASED (jamais de
+   * double libération), applique le mouvement RELEASE. No-op si aucune réservation
+   * active ou Wallet CLOSED (le sweep du groupe 5 réconciliera).
+   */
+  async releaseAiRunReservationInTx(
+    tx: PrismaTransaction,
+    params: { organizationId: string; aiRunId: string },
+  ): Promise<{ released: boolean }> {
+    const usage = await tx.aiUsageEvent.findUnique({
+      where: { aiRunId: params.aiRunId },
+      select: { id: true, walletId: true, status: true, creditsReserved: true, creditsCharged: true },
+    });
+    if (!usage || usage.status !== 'RESERVED') {
+      return { released: false };
+    }
+    const gate = await tx.aiUsageEvent.updateMany({
+      where: { id: usage.id, status: 'RESERVED' },
+      data: { status: 'RELEASED', completedAt: new Date() },
+    });
+    if (gate.count !== 1) {
+      return { released: false };
+    }
+    const outstanding = usage.creditsReserved - usage.creditsCharged;
+    if (outstanding <= 0) {
+      return { released: false };
+    }
+    const wallet = await tx.wallet.findUnique({
+      where: { id: usage.walletId },
+      select: { status: true },
+    });
+    if (!wallet || wallet.status === 'CLOSED') {
+      return { released: false };
+    }
+    const movement = await this.applyMovementInTx(tx, {
+      walletId: usage.walletId,
+      organizationId: params.organizationId,
+      type: 'AI_USAGE_RELEASE',
+      direction: 'RELEASE',
+      amountCredits: outstanding,
+      referenceType: 'AI_RUN',
+      referenceId: params.aiRunId,
+      idempotencyKey: aiUsageReleaseKey(params.aiRunId),
+      descriptionCode: 'AI_RUN_SUPERSEDED_RELEASE',
+    });
+    await tx.aiUsageEvent.update({
+      where: { id: usage.id },
+      data: { walletTransactionId: movement.walletTransactionId },
+      select: { id: true },
+    });
+    return { released: !movement.replayed };
   }
 }

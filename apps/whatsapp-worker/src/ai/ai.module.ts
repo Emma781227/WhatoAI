@@ -19,6 +19,7 @@ import { AiRecoveryService } from './ai-recovery.service';
 import { AiSchedulingService } from './ai-scheduling.service';
 import { AiTriggerService } from './ai-trigger.service';
 import { AiToolExecutor } from './tools/tool-executor';
+import { WalletReservationService } from '../wallet/wallet-reservation.service';
 
 /**
  * Orchestration IA (sous-phase B — déclenchement/debounce/supersede/sweep).
@@ -30,6 +31,7 @@ import { AiToolExecutor } from './tools/tool-executor';
   imports: [PrismaModule],
   providers: [
     ...aiQueueProviders,
+    WalletReservationService,
     AiTriggerService,
     AiSchedulingService,
     AiProcessProcessor,

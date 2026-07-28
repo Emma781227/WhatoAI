@@ -15,11 +15,18 @@ import {
   SOCKET_EVENTS,
 } from '@whauto/shared';
 import type { AiProcessMessageJobData, AiRealtimeEvent } from '@whauto/shared';
+import {
+  InsufficientCreditsError,
+  MAX_CREDITS_PER_AI_RUN,
+  WalletClosedError,
+  WalletSuspendedError,
+} from '@whauto/wallet';
 import type { Queue } from 'bullmq';
 
 import type { TenantContext } from '../../common/tenant/tenant-context.interface';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RealtimeService } from '../../realtime/realtime.service';
+import { WalletService } from '../../wallet/wallet.service';
 import { MessagesService } from '../conversations/messages.service';
 import { OrganizationAuditService } from '../organizations/organization-audit.service';
 import type { AuditActionContext } from '../organizations/organization-audit.service';
@@ -44,6 +51,7 @@ export class AiSuggestionsService {
     private readonly messages: MessagesService,
     private readonly realtime: RealtimeService,
     private readonly audit: OrganizationAuditService,
+    private readonly wallet: WalletService,
     @Inject(AI_PROCESS_QUEUE) private readonly aiQueue: Queue<AiProcessMessageJobData>,
   ) {}
 
@@ -106,9 +114,19 @@ export class AiSuggestionsService {
         });
       }
       if (activeRun) {
-        await this.prisma.aiRun.updateMany({
-          where: { id: activeRun.id, status: { in: [...ACTIVE_RUN_STATUSES] } },
-          data: { status: 'SUPERSEDED', completedAt: new Date() },
+        // Supersede + libération de la réservation dans la MÊME transaction
+        // (groupe 4) — sans quoi les crédits réservés fuiraient jusqu'au sweep.
+        await this.prisma.$transaction(async (tx) => {
+          const superseded = await tx.aiRun.updateMany({
+            where: { id: activeRun.id, status: { in: [...ACTIVE_RUN_STATUSES] } },
+            data: { status: 'SUPERSEDED', completedAt: new Date() },
+          });
+          if (superseded.count === 1) {
+            await this.wallet.releaseAiRunReservationInTx(tx, {
+              organizationId: tenant.organizationId,
+              aiRunId: activeRun.id,
+            });
+          }
         });
       }
       await this.audit.recordSafe({
@@ -140,6 +158,12 @@ export class AiSuggestionsService {
     if (existingRun) {
       return { status: 'NO_NEW_RUN', suggestion: null };
     }
+
+    // Pré-contrôle crédits (NON autoritaire — le worker réserve sous verrou et
+    // reste l'autorité finale) : renvoie 409 immédiat pour l'UX, uniquement
+    // maintenant qu'un vrai nouveau run serait planifié (jamais de réservation
+    // multiple : le pré-contrôle est en lecture seule).
+    await this.assertCanReserveCredits(tenant.organizationId);
 
     await this.enqueue(tenant, conversation.shopId, conversationId, trigger.id, trigger.channelId);
     await this.audit.recordSafe({
@@ -368,6 +392,25 @@ export class AiSuggestionsService {
     const envMode = this.configService.get<AiMode>('AI_MODE') ?? 'SUGGEST_ONLY';
     if (resolveEffectiveMode(envMode, config?.mode ?? null) === 'DISABLED') {
       throw new AiDisabledError();
+    }
+  }
+
+  /**
+   * Pré-vérification crédits pour une génération MANUELLE (groupe 4). Lecture
+   * seule et non autoritaire : distingue Wallet fermé/suspendu du solde
+   * insuffisant (409 avec `availableCredits`/`requiredCredits`/`canTopUp`). La
+   * réservation réelle reste faite atomiquement par le worker sous verrou.
+   */
+  private async assertCanReserveCredits(organizationId: string): Promise<void> {
+    const wallet = await this.wallet.ensureWallet(organizationId);
+    if (wallet.status === 'CLOSED') {
+      throw new WalletClosedError();
+    }
+    if (wallet.status !== 'ACTIVE') {
+      throw new WalletSuspendedError();
+    }
+    if (wallet.availableCredits < MAX_CREDITS_PER_AI_RUN) {
+      throw new InsufficientCreditsError(wallet.availableCredits, MAX_CREDITS_PER_AI_RUN);
     }
   }
 

@@ -1,6 +1,8 @@
 import type { ConfigService } from '@nestjs/config';
 
 import type { PrismaService } from '../prisma/prisma.service';
+import type { WalletReservationService } from '../wallet/wallet-reservation.service';
+import type { AiRealtimeEmitter } from './ai-realtime-emitter.service';
 import { AiTriggerService, resolveEffectiveAiMode } from './ai-trigger.service';
 import type { AiProcessMessageJobData } from '@whauto/shared';
 
@@ -50,18 +52,36 @@ interface Mocks {
   message: { findUnique: jest.Mock };
   aiConfiguration: { findUnique: jest.Mock };
   conversationHandoff: { findFirst: jest.Mock };
-  aiRun: { findUnique: jest.Mock; findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
+  aiRun: {
+    findUnique: jest.Mock;
+    findFirst: jest.Mock;
+    create: jest.Mock;
+    update: jest.Mock;
+    updateMany: jest.Mock;
+  };
   aiSuggestion: { updateMany: jest.Mock };
+  wallet: {
+    ensureWalletId: jest.Mock;
+    lockAndReadWallet: jest.Mock;
+    reserveForRunInTx: jest.Mock;
+    releaseRunReservationInTx: jest.Mock;
+    recordSkippedForRunInTx: jest.Mock;
+  };
+  emitter: { emitToOrganization: jest.Mock };
 }
 
-function build(options: {
-  envMode?: string;
-  message?: Record<string, unknown> | null;
-  config?: { provider: string; mode: string; model: string | null } | null;
-  handoff?: { id: string } | null;
-  existingRun?: { id: string } | null;
-  activeRun?: { id: string } | null;
-} = {}) {
+function build(
+  options: {
+    envMode?: string;
+    message?: Record<string, unknown> | null;
+    config?: { provider: string; mode: string; model: string | null } | null;
+    handoff?: { id: string } | null;
+    existingRun?: { id: string } | null;
+    activeRun?: { id: string } | null;
+    walletStatus?: string;
+    availableCredits?: number;
+  } = {},
+) {
   const created: { id: string } = { id: 'run-new' };
   const mocks: Mocks = {
     message: {
@@ -80,8 +100,28 @@ function build(options: {
       findFirst: jest.fn().mockResolvedValue(options.activeRun ?? null),
       create: jest.fn().mockResolvedValue(created),
       update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     aiSuggestion: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    wallet: {
+      ensureWalletId: jest.fn().mockResolvedValue('wallet-1'),
+      lockAndReadWallet: jest.fn().mockResolvedValue({
+        balanceCredits: options.availableCredits ?? 10,
+        reservedCredits: 0,
+        status: options.walletStatus ?? 'ACTIVE',
+        availableCredits: options.availableCredits ?? 10,
+      }),
+      reserveForRunInTx: jest.fn().mockResolvedValue({
+        walletTransactionId: 'wtx-1',
+        balanceAfterCredits: 10,
+        reservedAfterCredits: 3,
+        availableAfterCredits: 7,
+        replayed: false,
+      }),
+      releaseRunReservationInTx: jest.fn().mockResolvedValue({ released: true, walletId: 'wallet-1' }),
+      recordSkippedForRunInTx: jest.fn().mockResolvedValue(undefined),
+    },
+    emitter: { emitToOrganization: jest.fn() },
   };
 
   const prisma = {
@@ -90,6 +130,14 @@ function build(options: {
     conversationHandoff: mocks.conversationHandoff,
     aiRun: mocks.aiRun,
     aiSuggestion: mocks.aiSuggestion,
+    wallet: {
+      findUnique: jest.fn().mockResolvedValue({
+        balanceCredits: options.availableCredits ?? 10,
+        reservedCredits: 3,
+        status: options.walletStatus ?? 'ACTIVE',
+        version: 1,
+      }),
+    },
     $queryRaw: jest.fn().mockResolvedValue([]),
     $transaction: jest.fn(async (cb: (tx: unknown) => unknown) =>
       cb({
@@ -105,11 +153,17 @@ function build(options: {
       ({ AI_MODE: options.envMode ?? 'SUGGEST_ONLY', AI_PROVIDER: 'MOCK' })[key],
   } as unknown as ConfigService;
 
-  return { service: new AiTriggerService(prisma, config), mocks };
+  const service = new AiTriggerService(
+    prisma,
+    config,
+    mocks.wallet as unknown as WalletReservationService,
+    mocks.emitter as unknown as AiRealtimeEmitter,
+  );
+  return { service, mocks };
 }
 
 describe('AiTriggerService.processTrigger — gardes rejouées à l’exécution', () => {
-  it('crée un run QUEUED pour un message texte éligible', async () => {
+  it('crée un run QUEUED et RÉSERVE pour un message texte éligible', async () => {
     const { service, mocks } = build();
     const result = await service.processTrigger(DATA);
     expect(result.outcome).toBe('RUN_CREATED');
@@ -122,30 +176,44 @@ describe('AiTriggerService.processTrigger — gardes rejouées à l’exécution
         }),
       }),
     );
+    // Réservation faite pour le run créé + émission balance après commit.
+    expect(mocks.wallet.reserveForRunInTx).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ aiRunId: 'run-new', walletId: 'wallet-1' }),
+    );
+    expect(mocks.emitter.emitToOrganization).toHaveBeenCalledWith(
+      'org-1',
+      'wallet.balance.updated',
+      expect.objectContaining({ walletId: 'wallet-1', aiAvailable: expect.any(Boolean) }),
+    );
   });
 
-  it('coupe-circuit global : AI_MODE=DISABLED → aucun run, aucune lecture message', async () => {
+  it('coupe-circuit global : AI_MODE=DISABLED → aucun run, aucune lecture message, aucune réservation', async () => {
     const { service, mocks } = build({ envMode: 'DISABLED' });
     const result = await service.processTrigger(DATA);
     expect(result.outcome).toBe('SKIPPED_GLOBAL_DISABLED');
     expect(mocks.message.findUnique).not.toHaveBeenCalled();
     expect(mocks.aiRun.create).not.toHaveBeenCalled();
+    expect(mocks.wallet.ensureWalletId).not.toHaveBeenCalled();
+    expect(mocks.wallet.reserveForRunInTx).not.toHaveBeenCalled();
   });
 
-  it('Shop en DISABLED (config) l’emporte sur AI_MODE actif → aucun run', async () => {
+  it('Shop en DISABLED (config) l’emporte sur AI_MODE actif → aucun run, aucune réservation', async () => {
     const { service, mocks } = build({
       config: { provider: 'MOCK', mode: 'DISABLED', model: 'mock-model' },
     });
     const result = await service.processTrigger(DATA);
     expect(result.outcome).toBe('SKIPPED_SHOP_DISABLED');
     expect(mocks.aiRun.create).not.toHaveBeenCalled();
+    expect(mocks.wallet.reserveForRunInTx).not.toHaveBeenCalled();
   });
 
-  it('média (type non texte) → jamais de run', async () => {
+  it('média (type non texte) → jamais de run ni de réservation', async () => {
     const { service, mocks } = build({ message: eligibleMessage({ type: 'IMAGE' }) });
     const result = await service.processTrigger(DATA);
     expect(result.outcome).toBe('SKIPPED_UNSUPPORTED_TYPE');
     expect(mocks.aiRun.create).not.toHaveBeenCalled();
+    expect(mocks.wallet.reserveForRunInTx).not.toHaveBeenCalled();
   });
 
   it('message d’une autre Shop/Conversation (incohérence) → refus tenant', async () => {
@@ -163,7 +231,7 @@ describe('AiTriggerService.processTrigger — gardes rejouées à l’exécution
     expect((await service.processTrigger(DATA)).outcome).toBe('SKIPPED_MESSAGE_GONE');
   });
 
-  it('handoff ouvert → run SKIPPED tracé, jamais de génération', async () => {
+  it('handoff ouvert → run SKIPPED tracé, jamais de génération ni de réservation', async () => {
     const { service, mocks } = build({ handoff: { id: 'handoff-1' } });
     const result = await service.processTrigger(DATA);
     expect(result.outcome).toBe('HANDOFF_SKIPPED');
@@ -172,33 +240,94 @@ describe('AiTriggerService.processTrigger — gardes rejouées à l’exécution
         data: expect.objectContaining({ status: 'SKIPPED', errorCode: 'AI_BLOCKED_BY_HANDOFF' }),
       }),
     );
-    // Jamais entré dans la transaction de création de run actif.
     expect(mocks.aiRun.findFirst).not.toHaveBeenCalled();
+    expect(mocks.wallet.reserveForRunInTx).not.toHaveBeenCalled();
   });
 
-  it('run déjà existant pour le déclencheur → ALREADY_RUN (idempotent, pas de doublon)', async () => {
+  it('run déjà existant pour le déclencheur → ALREADY_RUN, aucune réservation (idempotent)', async () => {
     const { service, mocks } = build({ existingRun: { id: 'run-existant' } });
     const result = await service.processTrigger(DATA);
     expect(result.outcome).toBe('ALREADY_RUN');
     expect(result.runId).toBe('run-existant');
     expect(mocks.aiRun.create).not.toHaveBeenCalled();
+    expect(mocks.wallet.reserveForRunInTx).not.toHaveBeenCalled();
+    expect(mocks.emitter.emitToOrganization).not.toHaveBeenCalled();
   });
 
-  it('run actif d’un déclencheur antérieur → supersede + création du nouveau', async () => {
+  it('run actif d’un déclencheur antérieur → supersede + libération + création réservée', async () => {
     const { service, mocks } = build({ activeRun: { id: 'run-vieux' } });
     const result = await service.processTrigger(DATA);
     expect(result.outcome).toBe('SUPERSEDED_AND_CREATED');
     expect(result.supersededRunId).toBe('run-vieux');
-    // L'ancien run passe SUPERSEDED (conservé) et sa suggestion PENDING expire.
+    // La réservation du run superseded est libérée AVANT réservation du nouveau.
+    expect(mocks.wallet.releaseRunReservationInTx).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ aiRunId: 'run-vieux' }),
+    );
+    // L'ancien run quitte l'ensemble ACTIF (SUPERSEDED) via updateMany
+    // conditionnel AVANT création du nouveau, puis reçoit supersededByRunId.
+    expect(mocks.aiRun.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'run-vieux' }),
+        data: expect.objectContaining({ status: 'SUPERSEDED' }),
+      }),
+    );
     expect(mocks.aiRun.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'run-vieux' },
-        data: expect.objectContaining({ status: 'SUPERSEDED', supersededByRunId: 'run-new' }),
+        data: expect.objectContaining({ supersededByRunId: 'run-new' }),
       }),
     );
     expect(mocks.aiSuggestion.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: 'EXPIRED' } }),
     );
+    expect(mocks.wallet.reserveForRunInTx).toHaveBeenCalled();
+  });
+
+  it('solde insuffisant → run SKIPPED (INSUFFICIENT_CREDITS), aucune réservation, wallet.insufficient émis', async () => {
+    const { service, mocks } = build({ availableCredits: 2 });
+    const result = await service.processTrigger(DATA);
+    expect(result.outcome).toBe('SKIPPED_INSUFFICIENT_CREDITS');
+    expect(mocks.aiRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'SKIPPED', errorCode: 'INSUFFICIENT_CREDITS' }),
+      }),
+    );
+    expect(mocks.wallet.reserveForRunInTx).not.toHaveBeenCalled();
+    expect(mocks.wallet.recordSkippedForRunInTx).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ reasonCode: 'INSUFFICIENT_CREDITS' }),
+    );
+    expect(mocks.emitter.emitToOrganization).toHaveBeenCalledWith(
+      'org-1',
+      'wallet.insufficient',
+      expect.objectContaining({ requiredCredits: 3 }),
+    );
+  });
+
+  it('Wallet SUSPENDED → run SKIPPED (WALLET_SUSPENDED), aucune réservation, aucun wallet.insufficient', async () => {
+    const { service, mocks } = build({ walletStatus: 'SUSPENDED' });
+    const result = await service.processTrigger(DATA);
+    expect(result.outcome).toBe('SKIPPED_WALLET_SUSPENDED');
+    expect(mocks.aiRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'SKIPPED', errorCode: 'WALLET_SUSPENDED' }),
+      }),
+    );
+    expect(mocks.wallet.reserveForRunInTx).not.toHaveBeenCalled();
+    expect(mocks.emitter.emitToOrganization).not.toHaveBeenCalled();
+  });
+
+  it('Wallet CLOSED → run SKIPPED (WALLET_CLOSED), aucune réservation', async () => {
+    const { service, mocks } = build({ walletStatus: 'CLOSED' });
+    const result = await service.processTrigger(DATA);
+    expect(result.outcome).toBe('SKIPPED_WALLET_CLOSED');
+    expect(mocks.aiRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'SKIPPED', errorCode: 'WALLET_CLOSED' }),
+      }),
+    );
+    expect(mocks.wallet.reserveForRunInTx).not.toHaveBeenCalled();
   });
 
   it('modèle absent pour un provider GEMINI → SKIPPED_MISCONFIGURED (jamais de modèle deviné)', async () => {

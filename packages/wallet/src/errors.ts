@@ -27,10 +27,10 @@ export class WalletClosedError extends DomainError {
   }
 }
 
-/** 422 : solde disponible insuffisant pour réserver/débiter le montant demandé. */
+/** 409 : solde disponible insuffisant pour réserver/débiter le montant demandé. */
 export class InsufficientCreditsError extends DomainError {
   constructor(availableCredits: number, requiredCredits: number) {
-    super('Insufficient credit balance.', 'INSUFFICIENT_CREDITS', 422, {
+    super('Insufficient credit balance.', 'INSUFFICIENT_CREDITS', 409, {
       availableCredits,
       requiredCredits,
       canTopUp: true,

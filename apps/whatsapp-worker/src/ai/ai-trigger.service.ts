@@ -1,9 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { type AiMode, type AiProviderType, Prisma } from '@whauto/database';
-import type { AiProcessMessageJobData } from '@whauto/shared';
+import { SOCKET_EVENTS, type AiProcessMessageJobData, type WalletRealtimeEvent } from '@whauto/shared';
+import { MAX_CREDITS_PER_AI_RUN } from '@whauto/wallet';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { WalletReservationService } from '../wallet/wallet-reservation.service';
+import { AiRealtimeEmitter } from './ai-realtime-emitter.service';
 
 /**
  * Décide, pour UN message déclencheur, s'il faut créer un AiRun — et le crée.
@@ -26,7 +29,11 @@ export type AiTriggerOutcome =
   | 'SKIPPED_UNSUPPORTED_TYPE'
   | 'SKIPPED_TENANT_MISMATCH'
   | 'SKIPPED_CHANNEL_NOT_CONNECTED'
-  | 'SKIPPED_MISCONFIGURED';
+  | 'SKIPPED_MISCONFIGURED'
+  // Crédits (groupe 4) : le run est tracé SKIPPED, JAMAIS de génération/Gemini.
+  | 'SKIPPED_INSUFFICIENT_CREDITS'
+  | 'SKIPPED_WALLET_SUSPENDED'
+  | 'SKIPPED_WALLET_CLOSED';
 
 export interface AiTriggerResult {
   outcome: AiTriggerOutcome;
@@ -60,6 +67,8 @@ export class AiTriggerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly walletReservation: WalletReservationService,
+    private readonly realtimeEmitter: AiRealtimeEmitter,
   ) {}
 
   async processTrigger(data: AiProcessMessageJobData): Promise<AiTriggerResult> {
@@ -186,30 +195,46 @@ export class AiTriggerService {
     }
   }
 
+  /**
+   * Crée le run SOUS l'ordre de verrou FIXE Conversation → Wallet, et RÉSERVE
+   * atomiquement `MAX_CREDITS_PER_AI_RUN` avant tout appel Gemini (groupe 4).
+   * Dans UNE transaction : verrou Conversation ; idempotence trigger ; supersede
+   * + libération de la réservation du run antérieur ; verrou Wallet ; contrôle du
+   * disponible/statut ; création AiRun (QUEUED si réservé, SKIPPED sinon) ;
+   * WalletTransaction RESERVE (balance inchangée, reserved +3) ; AiUsageEvent.
+   * L'émission temps réel a lieu APRÈS commit (best-effort, jamais de rollback).
+   */
   private async createRunUnderLock(
     data: AiProcessMessageJobData,
     provider: AiProviderType,
     model: string,
     mode: AiMode,
   ): Promise<AiTriggerResult> {
+    // Provisioning idempotent HORS transaction (un P2002 EN tx avorterait tout).
+    const walletId = await this.walletReservation.ensureWalletId(data.organizationId);
+
     try {
-      return await this.prisma.$transaction(async (tx) => {
-        // Sérialise supersede + création par conversation : deux triggers
-        // concurrents ne peuvent jamais produire deux runs actifs.
+      const decision = await this.prisma.$transaction(async (tx) => {
+        // Verrou 1 — Conversation : sérialise supersede/création par conversation.
         await tx.$queryRaw`SELECT id FROM conversations WHERE id = ${data.conversationId} FOR UPDATE`;
 
-        // Idempotence : un run existe-t-il déjà pour CE déclencheur ?
+        // Idempotence : un run existe déjà pour CE déclencheur → aucun mouvement.
         const existing = await tx.aiRun.findUnique({
           where: { triggerMessageId: data.triggerMessageId },
           select: { id: true },
         });
         if (existing) {
-          return { outcome: 'ALREADY_RUN' as const, runId: existing.id, supersededRunId: null };
+          return {
+            outcome: 'ALREADY_RUN' as AiTriggerOutcome,
+            runId: existing.id,
+            supersededRunId: null,
+            emit: null as WalletEmit,
+          };
         }
 
-        // Run actif d'un déclencheur ANTÉRIEUR → SUPERSEDED (ajustement 7) :
-        // la ligne est conservée, jamais supprimée ; sa suggestion PENDING
-        // éventuelle passe EXPIRED (jamais supprimée non plus).
+        // Run actif d'un déclencheur ANTÉRIEUR → sera SUPERSEDED ; sa réservation
+        // est libérée AVANT d'évaluer le disponible du nouveau run (les crédits
+        // rendus peuvent le rendre réservable). Libération strictement idempotente.
         const active = await tx.aiRun.findFirst({
           where: {
             conversationId: data.conversationId,
@@ -217,7 +242,85 @@ export class AiTriggerService {
           },
           select: { id: true },
         });
+        if (active) {
+          // Sort le run antérieur de l'ensemble ACTIF AVANT de créer le nouveau
+          // (l'index partiel `ai_runs_one_active_per_conversation` interdit deux
+          // runs actifs) ; `supersededByRunId` est posé après création. Transition
+          // conditionnelle = GATE anti-concurrence.
+          const superseded = await tx.aiRun.updateMany({
+            where: { id: active.id, status: { in: [...ACTIVE_RUN_STATUSES] } },
+            data: { status: 'SUPERSEDED', completedAt: new Date() },
+          });
+          if (superseded.count === 1) {
+            await tx.aiSuggestion.updateMany({
+              where: { aiRunId: active.id, status: 'PENDING' },
+              data: { status: 'EXPIRED' },
+            });
+            await this.walletReservation.releaseRunReservationInTx(tx, {
+              organizationId: data.organizationId,
+              aiRunId: active.id,
+            });
+          }
+        }
+        const supersededRunId = active?.id ?? null;
 
+        // Verrou 2 — Wallet (après Conversation) : sérialise l'accès
+        // cross-conversation au Wallet de l'organisation. Le disponible est lu
+        // APRÈS la libération éventuelle.
+        const wallet = await this.walletReservation.lockAndReadWallet(
+          tx,
+          walletId,
+          data.organizationId,
+        );
+
+        // Éligibilité Wallet du NOUVEAU run — distingue statut et solde.
+        const skip = resolveWalletSkip(wallet.status, wallet.availableCredits);
+
+        if (skip) {
+          const run = await tx.aiRun.create({
+            data: {
+              organizationId: data.organizationId,
+              shopId: data.shopId,
+              conversationId: data.conversationId,
+              triggerMessageId: data.triggerMessageId,
+              contextLastMessageId: data.triggerMessageId,
+              provider,
+              model,
+              requestedModel: model,
+              mode,
+              status: 'SKIPPED',
+              errorCode: skip.code,
+              completedAt: new Date(),
+            },
+            select: { id: true },
+          });
+          if (active) {
+            await tx.aiRun.update({
+              where: { id: active.id },
+              data: { supersededByRunId: run.id },
+              select: { id: true },
+            });
+          }
+          // AiUsageEvent SKIPPED à 0 crédit : conserve le 1:1 avec le run.
+          await this.walletReservation.recordSkippedForRunInTx(tx, {
+            organizationId: data.organizationId,
+            shopId: data.shopId,
+            walletId,
+            aiRunId: run.id,
+            provider,
+            requestedModel: model,
+            reasonCode: skip.code,
+          });
+          return {
+            outcome: skip.outcome,
+            runId: run.id,
+            supersededRunId,
+            // wallet.insufficient uniquement pour un solde trop bas.
+            emit: skip.code === 'INSUFFICIENT_CREDITS' ? ('INSUFFICIENT' as WalletEmit) : null,
+          };
+        }
+
+        // Réservation + run QUEUED (prêt pour la génération).
         const run = await tx.aiRun.create({
           data: {
             organizationId: data.organizationId,
@@ -235,28 +338,42 @@ export class AiTriggerService {
           },
           select: { id: true },
         });
-
         if (active) {
           await tx.aiRun.update({
             where: { id: active.id },
-            data: { status: 'SUPERSEDED', supersededByRunId: run.id, completedAt: new Date() },
+            data: { supersededByRunId: run.id },
+            select: { id: true },
           });
-          await tx.aiSuggestion.updateMany({
-            where: { aiRunId: active.id, status: 'PENDING' },
-            data: { status: 'EXPIRED' },
-          });
-          return {
-            outcome: 'SUPERSEDED_AND_CREATED' as const,
-            runId: run.id,
-            supersededRunId: active.id,
-          };
         }
-        return { outcome: 'RUN_CREATED' as const, runId: run.id, supersededRunId: null };
+        await this.walletReservation.reserveForRunInTx(tx, {
+          organizationId: data.organizationId,
+          shopId: data.shopId,
+          walletId,
+          aiRunId: run.id,
+          provider,
+          requestedModel: model,
+        });
+        return {
+          outcome: (active ? 'SUPERSEDED_AND_CREATED' : 'RUN_CREATED') as AiTriggerOutcome,
+          runId: run.id,
+          supersededRunId,
+          emit: 'BALANCE' as WalletEmit,
+        };
       });
+
+      // Émission temps réel APRÈS commit — jamais dans la transaction.
+      await this.emitWalletAfterCommit(data, walletId, decision.emit);
+
+      return {
+        outcome: decision.outcome,
+        runId: decision.runId,
+        supersededRunId: decision.supersededRunId,
+      };
     } catch (error) {
       if (isUniqueViolation(error)) {
         // Course perdue (triggerMessageId ou index « un actif par conversation ») :
         // un autre worker a créé le run — no-op idempotent, jamais une erreur.
+        // Aucune réservation n'a abouti ici (P2002 avorte la transaction).
         const existing = await this.prisma.aiRun.findUnique({
           where: { triggerMessageId: data.triggerMessageId },
           select: { id: true },
@@ -266,4 +383,78 @@ export class AiTriggerService {
       throw error;
     }
   }
+
+  /**
+   * Publie le solde agrégé du Wallet APRÈS commit (best-effort). Lit l'état
+   * committé, calcule `aiAvailable` (dérivé) et n'émet aucun secret ni détail
+   * Gemini. Une émission échouée ne fait jamais échouer un run.
+   */
+  private async emitWalletAfterCommit(
+    data: AiProcessMessageJobData,
+    walletId: string,
+    emit: WalletEmit,
+  ): Promise<void> {
+    if (!emit) {
+      return;
+    }
+    // Best-effort STRICT : la réservation est déjà committée ; une lecture ou une
+    // émission en échec (Redis KO) ne doit JAMAIS faire échouer le run — le
+    // recovery/refetch réconcilie. Aucune libération ici.
+    try {
+      const wallet = await this.prisma.wallet.findUnique({
+        where: { id: walletId },
+        select: { balanceCredits: true, reservedCredits: true, status: true, version: true },
+      });
+      if (!wallet) {
+        return;
+      }
+      const available = wallet.balanceCredits - wallet.reservedCredits;
+      const payload: WalletRealtimeEvent = {
+        organizationId: data.organizationId,
+        walletId,
+        balanceCredits: wallet.balanceCredits,
+        reservedCredits: wallet.reservedCredits,
+        availableCredits: available,
+        aiAvailable: wallet.status === 'ACTIVE' && available >= MAX_CREDITS_PER_AI_RUN,
+        version: wallet.version,
+        conversationId: data.conversationId,
+        ...(emit === 'INSUFFICIENT' ? { requiredCredits: MAX_CREDITS_PER_AI_RUN } : {}),
+      };
+      const event =
+        emit === 'INSUFFICIENT'
+          ? SOCKET_EVENTS.WALLET_INSUFFICIENT
+          : SOCKET_EVENTS.WALLET_BALANCE_UPDATED;
+      this.realtimeEmitter.emitToOrganization(data.organizationId, event, payload);
+    } catch (error) {
+      this.logger.warn(
+        `Émission Wallet post-commit échouée (réservation conservée) : ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+}
+
+/** Directive d'émission temps réel post-commit (aucune = pas d'émission). */
+type WalletEmit = 'BALANCE' | 'INSUFFICIENT' | null;
+
+/**
+ * Décide si un run doit être SKIPPÉ pour raison Wallet (statut ou solde). CLOSED
+ * et SUSPENDED priment sur le solde ; le solde insuffisant est distinct
+ * (`INSUFFICIENT_CREDITS`). Retourne `null` si la réservation est autorisée.
+ */
+function resolveWalletSkip(
+  status: string,
+  available: number,
+): { code: string; outcome: AiTriggerOutcome } | null {
+  if (status === 'CLOSED') {
+    return { code: 'WALLET_CLOSED', outcome: 'SKIPPED_WALLET_CLOSED' };
+  }
+  if (status !== 'ACTIVE') {
+    return { code: 'WALLET_SUSPENDED', outcome: 'SKIPPED_WALLET_SUSPENDED' };
+  }
+  if (available < MAX_CREDITS_PER_AI_RUN) {
+    return { code: 'INSUFFICIENT_CREDITS', outcome: 'SKIPPED_INSUFFICIENT_CREDITS' };
+  }
+  return null;
 }

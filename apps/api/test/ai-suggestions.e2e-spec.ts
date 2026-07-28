@@ -392,6 +392,36 @@ describe('IA — suggestions (e2e)', () => {
     expect(res.body.code).toBe('AI_CONVERSATION_IN_HANDOFF');
   });
 
+  it('génération manuelle avec solde insuffisant → 409 INSUFFICIENT_CREDITS (groupe 4)', async () => {
+    // Le Wallet de l'org e2e est à 0 crédit (provisionné à la création). Une
+    // conversation avec un message entrant SANS run/suggestion atteint le
+    // pré-contrôle crédits juste avant l'enqueue.
+    seedCounter += 1;
+    const phone = `+2378${String(10000000 + seedCounter).slice(-8)}`;
+    const contact = await prisma.contact.create({
+      data: { organizationId: orgId, shopId, whatsappPhone: phone, normalizedPhone: phone },
+      select: { id: true },
+    });
+    const conversation = await prisma.conversation.create({
+      data: { organizationId: orgId, shopId, channelId, contactId: contact.id, status: 'OPEN', customerServiceWindowExpiresAt: new Date(Date.now() + 3600_000) },
+      select: { id: true },
+    });
+    await prisma.message.create({
+      data: { organizationId: orgId, shopId, conversationId: conversation.id, channelId, contactId: contact.id, direction: 'INBOUND', type: 'TEXT', status: 'RECEIVED', senderType: 'CUSTOMER', textContent: 'Bonjour' },
+      select: { id: true },
+    });
+
+    const res = await request(server)
+      .post(`${suggBase(conversation.id)}/generate`)
+      .set(authAgent())
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('INSUFFICIENT_CREDITS');
+    expect(res.body.details).toMatchObject({ availableCredits: 0, requiredCredits: 3, canTopUp: true });
+    // Aucune réservation créée (pré-contrôle en lecture seule).
+    expect(await prisma.aiRun.count({ where: { conversationId: conversation.id } })).toBe(0);
+  });
+
   // ------------------------------------------------------------ cross-tenant
 
   it('cross-tenant : accéder à une suggestion via une autre organisation → 404', async () => {

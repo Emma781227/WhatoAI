@@ -322,6 +322,9 @@ importers:
       '@whauto/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@whauto/wallet':
+        specifier: workspace:*
+        version: link:../../packages/wallet
       '@whauto/whatsapp':
         specifier: workspace:*
         version: link:../../packages/whatsapp
