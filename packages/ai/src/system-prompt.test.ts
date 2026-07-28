@@ -26,6 +26,23 @@ describe('buildAiSystemPrompt', () => {
     expect(prompt).toMatch(/SUGGEST_REPLY|structure imposée/i);
   });
 
+  it('instruit l’accueil au nom de la boutique et le cadre strict (hors-sujet refusé)', () => {
+    const prompt = buildAiSystemPrompt({ shopName: 'Chez Awa' });
+    expect(prompt.toLowerCase()).toContain('accueil');
+    expect(prompt).toMatch(/bienvenue chez Chez Awa/i);
+    expect(prompt.toLowerCase()).toContain('cadre strict');
+    expect(prompt.toLowerCase()).toMatch(/hors de ce cadre|culture générale/);
+  });
+
+  it('instruit la gestion des ruptures avec alternatives et la conduite de la vente', () => {
+    const prompt = buildAiSystemPrompt({ shopName: 'X' });
+    expect(prompt.toLowerCase()).toContain('rupture');
+    expect(prompt.toLowerCase()).toContain('alternatives');
+    expect(prompt.toLowerCase()).toMatch(/même catégorie|similaires/);
+    expect(prompt.toLowerCase()).toContain('en stock');
+    expect(prompt.toLowerCase()).toMatch(/étape suivante|fais avancer/);
+  });
+
   it('n’expose jamais de secret et reste bref', () => {
     const prompt = buildAiSystemPrompt({ shopName: 'X', businessRules: 'Pas de retour après 7 jours.' });
     expect(prompt).not.toMatch(/api[_-]?key|token|secret/i);

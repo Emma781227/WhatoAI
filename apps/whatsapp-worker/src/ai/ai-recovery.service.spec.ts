@@ -1,6 +1,7 @@
 import type { ConfigService } from '@nestjs/config';
 
 import type { PrismaService } from '../prisma/prisma.service';
+import type { AiOrchestratorService } from './ai-orchestrator.service';
 import type { AiSchedulingService } from './ai-scheduling.service';
 import { AiRecoveryService } from './ai-recovery.service';
 
@@ -27,14 +28,21 @@ function build(options: {
   orphans?: { conversationId: string }[];
   latest?: Record<string, unknown> | null;
   activeRun?: { id: string } | null;
+  staleRuns?: { id: string }[];
 }) {
   const scheduling = { scheduleDebounced: jest.fn().mockResolvedValue(true) };
+  const orchestrator = { runGeneration: jest.fn().mockResolvedValue(undefined) };
   const prisma = {
     message: {
       findMany: jest.fn().mockResolvedValue(options.orphans ?? [{ conversationId: 'conv-1' }]),
       findFirst: jest.fn().mockResolvedValue(options.latest === undefined ? inWindow() : options.latest),
     },
-    aiRun: { findFirst: jest.fn().mockResolvedValue(options.activeRun ?? null) },
+    aiRun: {
+      findFirst: jest.fn().mockResolvedValue(options.activeRun ?? null),
+      // Runs coincés (recoverStaleRuns) : vide par défaut → no-op.
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      findMany: jest.fn().mockResolvedValue(options.staleRuns ?? []),
+    },
   } as unknown as PrismaService;
   const config = {
     get: (key: string) =>
@@ -47,8 +55,9 @@ function build(options: {
     prisma,
     config,
     scheduling as unknown as AiSchedulingService,
+    orchestrator as unknown as AiOrchestratorService,
   );
-  return { service, scheduling, prisma };
+  return { service, scheduling, orchestrator, prisma };
 }
 
 describe('AiRecoveryService.sweep — reprise après publication perdue', () => {
@@ -99,5 +108,16 @@ describe('AiRecoveryService.sweep — reprise après publication perdue', () => 
     const [a, b] = await Promise.all([service.sweep(NOW), service.sweep(NOW)]);
     // L'un fait le travail, l'autre voit `running` et rend 0 immédiatement.
     expect([a, b].filter((n) => n === 0).length).toBeGreaterThanOrEqual(0);
+  });
+
+  it('relance les runs coincés en QUEUED (auto-guérison — plus de blocage permanent)', async () => {
+    const { service, orchestrator } = build({
+      orphans: [],
+      staleRuns: [{ id: 'run-stuck-1' }, { id: 'run-stuck-2' }],
+    });
+    const recovered = await service.sweep(NOW);
+    expect(orchestrator.runGeneration).toHaveBeenCalledWith('run-stuck-1');
+    expect(orchestrator.runGeneration).toHaveBeenCalledWith('run-stuck-2');
+    expect(recovered).toBe(2);
   });
 });

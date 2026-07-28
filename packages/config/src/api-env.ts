@@ -4,10 +4,12 @@ import { aiEnvFields } from './ai-env';
 import { baseEnvSchema } from './base-env';
 import { booleanEnv } from './helpers';
 import { metaEnvFields } from './meta-env';
+import { paymentEnvFields } from './payment-env';
 
 export const apiEnvSchema = baseEnvSchema.extend({
   ...metaEnvFields,
   ...aiEnvFields,
+  ...paymentEnvFields,
   API_PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().url().default('http://localhost:3000'),
   DATABASE_URL: z.string().url(),
@@ -85,6 +87,13 @@ export const apiEnvSchema = baseEnvSchema.extend({
       code: z.ZodIssueCode.custom,
       path: ['ENABLE_MOCK_WHATSAPP_ENDPOINTS'],
       message: 'ENABLE_MOCK_WHATSAPP_ENDPOINTS ne doit jamais être actif en production.',
+    });
+  }
+  if (env.NODE_ENV === 'production' && env.ALLOW_MOCK_PAYMENTS) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ALLOW_MOCK_PAYMENTS'],
+      message: 'ALLOW_MOCK_PAYMENTS ne doit jamais être actif en production.',
     });
   }
 });

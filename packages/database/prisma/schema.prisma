@@ -117,6 +117,12 @@ enum OrganizationAuditEventType {
   AI_AUTO_REPLY_SUPPRESSED
   AI_AUTO_REPLY_PAUSED
   AI_AUTO_REPLY_RESUMED
+  // Wallet / crédits (module Billing).
+  WALLET_CREATED
+  WALLET_CREDITED
+  TOPUP_CREATED
+  TOPUP_PAID
+  TOPUP_FAILED
 }
 
 // ============================================================================
@@ -441,6 +447,8 @@ model User {
   orderNotes              OrderNote[]              @relation("OrderNoteAuthor")
   acceptedAiSuggestions   AiSuggestion[]           @relation("AiSuggestionAcceptedBy")
   rejectedAiSuggestions   AiSuggestion[]           @relation("AiSuggestionRejectedBy")
+  walletTransactions      WalletTransaction[]      @relation("WalletTransactionCreatedBy")
+  initiatedTopUps         TopUp[]                  @relation("TopUpInitiatedBy")
 
   @@map("users")
 }
@@ -496,6 +504,11 @@ model Organization {
   aiSuggestions        AiSuggestion[]
   aiToolCalls          AiToolCall[]
   conversationHandoffs ConversationHandoff[]
+
+  wallet             Wallet?
+  walletTransactions WalletTransaction[]
+  topUps             TopUp[]
+  aiUsageEvents      AiUsageEvent[]
 
   @@map("organizations")
 }
@@ -575,6 +588,7 @@ model Shop {
   aiSuggestions        AiSuggestion[]
   aiToolCalls          AiToolCall[]
   conversationHandoffs ConversationHandoff[]
+  aiUsageEvents        AiUsageEvent[]
 
   // Index unique partiel supplémentaire en SQL brut dans la migration
   // (inexprimable en Prisma) : une seule Shop principale non archivée par org.
@@ -1816,7 +1830,7 @@ model AiConfiguration {
   model               String?
   systemPromptOverride String?
   maxOutputTokens     Int            @default(300)
-  contextMaxMessages  Int            @default(20)
+  contextMaxMessages  Int            @default(50)
   toolMaxRounds       Int            @default(4)
   // AUTO_REPLY exige CE drapeau ET mode=AUTO_REPLY : deux verrous distincts,
   // activables uniquement par OWNER/ADMIN (sous-phase C).
@@ -1905,6 +1919,7 @@ model AiRun {
   toolCalls      AiToolCall[]
   handoffs       ConversationHandoff[]
   autoReplyMessages Message[]    @relation("AiRunAutoReplyMessage")
+  usageEvent     AiUsageEvent?
 
   @@index([organizationId, shopId, status])
   @@index([conversationId, createdAt])
@@ -2015,4 +2030,228 @@ model ConversationHandoff {
   @@index([conversationId, status])
   @@index([organizationId, shopId, status, requestedAt])
   @@map("conversation_handoffs")
+}
+
+// ============================================================================
+// WALLET / CRÉDITS (module Billing — groupe 1 : Wallet + ledger immuable)
+// ============================================================================
+
+enum WalletStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum WalletTransactionType {
+  CREDIT_PURCHASE
+  MANUAL_CREDIT
+  PROMOTIONAL_CREDIT
+  AI_USAGE_RESERVATION
+  AI_USAGE_DEBIT
+  AI_USAGE_RELEASE
+  REFUND
+  EXPIRATION
+  ADJUSTMENT
+  REVERSAL
+}
+
+enum WalletTransactionDirection {
+  CREDIT
+  DEBIT
+  RESERVE
+  RELEASE
+}
+
+// Un Wallet par Organization (crédits mutualisés entre toutes ses Shops).
+// `balanceCredits`/`reservedCredits` = soldes courants optimisés ; l'historique
+// comptable immuable vit dans WalletTransaction. Toute mutation passe par le
+// WalletService (verrou FOR UPDATE + WalletTransaction), jamais un update isolé.
+// Bornes garanties EN BASE par des CHECK SQL bruts (migration) :
+//   balanceCredits >= 0 · reservedCredits >= 0 · reservedCredits <= balanceCredits
+//   · balanceCredits <= 1 000 000 000.
+model Wallet {
+  id              String       @id @default(cuid())
+  organizationId  String       @unique
+  balanceCredits  Int          @default(0)
+  reservedCredits Int          @default(0)
+  status          WalletStatus @default(ACTIVE)
+  version         Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  organization  Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  transactions  WalletTransaction[]
+  topUps        TopUp[]
+  aiUsageEvents AiUsageEvent[]
+
+  // Cible de la FK composite des WalletTransaction/TopUp/AiUsageEvent (cross-tenant EN BASE).
+  @@unique([id, organizationId])
+  @@map("wallets")
+}
+
+// Ledger IMMUABLE : chaque mouvement de crédits est append-only. Aucune
+// modification ni suppression après création (garanti par un trigger SQL brut).
+// Le signe est porté par `direction` ; `amountCredits` est strictement positif
+// (CHECK SQL). `idempotencyKey` unique : rejouer une opération ne produit jamais
+// un second mouvement. `metadataFiltered` ne contient JAMAIS de secret ni de
+// numéro de paiement complet ni de texte de conversation.
+model WalletTransaction {
+  id                    String                     @id @default(cuid())
+  organizationId        String
+  walletId              String
+  type                  WalletTransactionType
+  direction             WalletTransactionDirection
+  amountCredits         Int
+  balanceBeforeCredits  Int
+  balanceAfterCredits   Int
+  reservedBeforeCredits Int
+  reservedAfterCredits  Int
+  referenceType         String?
+  referenceId           String?
+  idempotencyKey        String                     @unique
+  descriptionCode       String?
+  metadataFiltered      Json?
+  createdByUserId       String?
+  createdAt             DateTime                   @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  // FK COMPOSITE (walletId, organizationId) → wallets(id, organizationId) :
+  // une transaction ne peut JAMAIS référencer un Wallet d'une autre organisation.
+  wallet    Wallet @relation(fields: [walletId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  createdBy User?  @relation("WalletTransactionCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  aiUsageEvents AiUsageEvent[]
+
+  @@index([walletId, createdAt])
+  @@index([organizationId, createdAt])
+  @@index([referenceType, referenceId])
+  @@map("wallet_transactions")
+}
+
+enum TopUpStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+// Miroir de `PaymentProviderName` (@whauto/payments). MOCK en dev/test.
+enum TopUpProvider {
+  MOCK
+  GENIUS_PAY
+}
+
+// Pack de crédits GLOBAL (pas d'organizationId) : alimenté par seed/migration
+// contrôlée (aucune création publique dans cette phase). Le nombre de crédits et
+// le prix sont AUTORITAIRES côté serveur — le frontend n'envoie que l'id du pack.
+model CreditPackage {
+  id            String   @id @default(cuid())
+  code          String   @unique
+  name          String
+  description   String?
+  priceMinor    Int
+  currency      String
+  creditsGranted Int
+  bonusCredits  Int      @default(0)
+  isActive      Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  version       Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  topUps TopUp[]
+
+  @@map("credit_packages")
+}
+
+// Recharge : l'agrégateur encaisse l'argent, le Wallet reçoit les crédits. Les
+// montants et crédits sont FIGÉS à la création (jamais recalculés depuis un pack
+// modifié). Un TopUp PAID ne crédite le Wallet qu'UNE fois (idempotence via la
+// WalletTransaction CREDIT_PURCHASE de clé `topup:credit:{id}`).
+model TopUp {
+  id                String        @id @default(cuid())
+  organizationId    String
+  walletId          String
+  creditPackageId   String
+  provider          TopUpProvider
+  status            TopUpStatus   @default(PENDING)
+  amountMinor       Int
+  currency          String
+  creditsGranted    Int
+  bonusCredits      Int           @default(0)
+  providerPaymentId String?       @unique
+  providerReference String?
+  idempotencyKey    String        @unique
+  initiatedByUserId String?
+  failureCode       String?
+  paidAt            DateTime?
+  failedAt          DateTime?
+  expiredAt         DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  // FK COMPOSITE (walletId, organizationId) → cohérence cross-tenant EN BASE.
+  wallet        Wallet        @relation(fields: [walletId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  creditPackage CreditPackage @relation(fields: [creditPackageId], references: [id], onDelete: Restrict)
+  initiatedBy   User?         @relation("TopUpInitiatedBy", fields: [initiatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([walletId, status])
+  @@map("topups")
+}
+
+enum AiUsageEventStatus {
+  PENDING
+  RESERVED
+  CHARGED
+  RELEASED
+  SKIPPED
+  FAILED
+}
+
+// Événement de consommation IA lié 1:1 à un AiRun (`aiRunId @unique`) : un run
+// n'est facturé qu'UNE fois. La réservation puis le débit/libération (groupes
+// suivants) écrivent leur montant ici ; `walletTransactionId` relie au débit
+// réel du ledger. `successfulToolCalls` (D5) est la base de tarification, pas
+// `toolRounds`. Aucun coût fournisseur monétaire n'est stocké — seulement des
+// crédits et les tokens bruts (pour le diagnostic). CHECK SQL : crédits >= 0 et
+// creditsCharged <= creditsReserved.
+model AiUsageEvent {
+  id                  String             @id @default(cuid())
+  organizationId      String
+  shopId              String
+  walletId            String
+  aiRunId             String             @unique
+  provider            AiProviderType
+  requestedModel      String?
+  resolvedModel       String?
+  inputTokens         Int?
+  outputTokens        Int?
+  totalTokens         Int?
+  toolRounds          Int                @default(0)
+  successfulToolCalls Int                @default(0)
+  action              String?
+  creditsReserved     Int                @default(0)
+  creditsCharged      Int                @default(0)
+  pricingVersion      String?
+  reasonCode          String?
+  status              AiUsageEventStatus @default(PENDING)
+  idempotencyKey      String             @unique
+  walletTransactionId String?
+  createdAt           DateTime           @default(now())
+  completedAt         DateTime?
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop              Shop               @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  wallet            Wallet             @relation(fields: [walletId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  aiRun             AiRun              @relation(fields: [aiRunId], references: [id], onDelete: Cascade)
+  walletTransaction WalletTransaction? @relation(fields: [walletTransactionId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([shopId, createdAt])
+  @@index([status])
+  @@map("ai_usage_events")
 }

@@ -76,6 +76,7 @@ const searchProducts: AiToolDefinitionEntry<z.infer<typeof searchProductsInput>>
         name: true,
         shortDescription: true,
         currency: true,
+        category: { select: { name: true } },
         // costPriceMinor JAMAIS sélectionné.
         variants: {
           where: { status: 'ACTIVE', archivedAt: null },
@@ -129,6 +130,7 @@ const getProductDetails: AiToolDefinitionEntry<z.infer<typeof getProductDetailsI
         description: true,
         shortDescription: true,
         currency: true,
+        category: { select: { name: true } },
         variants: {
           where: { status: 'ACTIVE', archivedAt: null },
           orderBy: { sortOrder: 'asc' },
@@ -154,6 +156,9 @@ const getProductDetails: AiToolDefinitionEntry<z.infer<typeof getProductDetailsI
     const result = {
       productId: product.id,
       name: product.name,
+      // Catégorie exposée pour permettre au modèle de proposer des alternatives
+      // de la MÊME catégorie via search_products en cas de rupture.
+      category: product.category?.name ?? null,
       description: (product.shortDescription ?? product.description ?? '').slice(0, 500),
       currency: product.currency,
       options: product.options.map((option) => ({
@@ -429,11 +434,13 @@ function summariseProduct(product: {
   name: string;
   shortDescription: string | null;
   currency: string;
+  category: { name: string } | null;
   variants: Array<VariantStockShape & { id: string; name: string | null; priceMinor: number }>;
   images: Array<{ url: string }>;
 }): {
   productId: string;
   name: string;
+  category: string | null;
   shortDescription: string | null;
   currency: string;
   priceFromMinor: number | null;
@@ -450,6 +457,8 @@ function summariseProduct(product: {
   return {
     productId: product.id,
     name: product.name,
+    // Catégorie exposée pour la recommandation d'alternatives (même catégorie).
+    category: product.category?.name ?? null,
     shortDescription: product.shortDescription,
     currency: product.currency,
     priceFromMinor,

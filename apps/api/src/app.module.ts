@@ -17,6 +17,7 @@ import { DevWhatsAppMockModule } from './modules/dev-whatsapp-mock/dev-whatsapp-
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
+import { WalletModule } from './wallet/wallet.module';
 import { AiModule } from './modules/ai/ai.module';
 import { ProductsModule } from './modules/products/products.module';
 import { ShopsModule } from './modules/shops/shops.module';
@@ -52,6 +53,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     RealtimeModule,
     AuthModule,
     OrganizationsModule,
+    WalletModule,
     ShopsModule,
     WhatsAppChannelsModule,
     WhatsAppInboundModule,

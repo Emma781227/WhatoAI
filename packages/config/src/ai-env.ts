@@ -39,7 +39,7 @@ export const aiEnvFields = {
   GEMINI_API_VERSION: z.string().default('v1beta'),
 
   AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(300),
-  AI_CONTEXT_MAX_MESSAGES: z.coerce.number().int().positive().default(20),
+  AI_CONTEXT_MAX_MESSAGES: z.coerce.number().int().positive().default(50),
   AI_TOOL_MAX_ROUNDS: z.coerce.number().int().positive().default(4),
   AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
 

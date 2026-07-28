@@ -123,12 +123,31 @@ export class OrganizationsService {
         select: { id: true },
       });
 
+      // Wallet provisionné dans la MÊME transaction (0 crédit, ACTIVE, défauts
+      // du schéma) : toute Organization a toujours exactement un Wallet dès sa
+      // naissance. Create SIMPLE (org neuve) — jamais de rattrapage P2002 EN
+      // transaction (25P02). Le filet idempotent vit dans WalletService.ensureWallet.
+      const wallet = await tx.wallet.create({
+        data: { organizationId: organization.id },
+        select: { id: true },
+      });
+
       await this.auditService.record(
         {
           organizationId: organization.id,
           eventType: 'ORGANIZATION_CREATED',
           actorUserId: userId,
           metadata: { name: organization.name, slug: organization.slug },
+          context,
+        },
+        tx,
+      );
+      await this.auditService.record(
+        {
+          organizationId: organization.id,
+          eventType: 'WALLET_CREATED',
+          actorUserId: userId,
+          metadata: { walletId: wallet.id },
           context,
         },
         tx,

@@ -4,29 +4,63 @@ node_modules/
 
 # build outputs
 dist/
+build/
 .next/
+out/
 .turbo/
 *.tsbuildinfo
 
-# env
+# env & secrets — NE JAMAIS committer un .env réel.
+# `.env` (exact) + tout `.env.*` (production/staging/local…) sont ignorés ;
+# seul `.env.example` (valeurs vides/factices) reste suivi.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
-# prisma
+# certificats / clés (défensif — jamais dans le dépôt)
+*.pem
+*.key
+*.pfx
+*.p12
+*.keystore
+
+# prisma / bases locales
 packages/database/prisma/dev.db
+*.db
+*.sqlite
+*.sqlite3
 
 # logs
 *.log
 npm-debug.log*
 pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# tests — Playwright / coverage (artefacts locaux)
+coverage/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+.playwright/
+
+# Claude Code — réglages LOCAUX (jamais partagés)
+.claude/settings.local.json
+
+# outils de déploiement (défensif)
+.vercel/
+.wrangler/
 
 # os / editor
 .DS_Store
 Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.idea/
+*.swp
+*.swo
+*~
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json.example
-
-# coverage
-coverage/

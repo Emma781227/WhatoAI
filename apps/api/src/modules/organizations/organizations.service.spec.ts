@@ -53,6 +53,9 @@ function buildMocks() {
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(1),
     },
+    wallet: {
+      create: jest.fn().mockResolvedValue({ id: 'wallet-1' }),
+    },
     $transaction: jest.fn(),
   };
   prisma.$transaction.mockImplementation(async (arg: unknown) =>

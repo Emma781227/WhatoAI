@@ -11,3 +11,12 @@ export function booleanEnv(defaultValue: boolean) {
     .default(defaultValue ? 'true' : 'false')
     .transform((value) => value === 'true');
 }
+
+/**
+ * URL OPTIONNELLE tolérant la chaîne VIDE : dans un `.env`, `FOO=` produit `""`,
+ * que `z.string().url().optional()` REFUSE (optional ne saute que `undefined`).
+ * On transforme `""` en `undefined` AVANT la validation d'URL.
+ */
+export function optionalUrl() {
+  return z.preprocess((value) => (value === '' ? undefined : value), z.string().url().optional());
+}
