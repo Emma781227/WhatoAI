@@ -12,6 +12,7 @@ import type { AiProviderFactory } from './ai-provider.factory';
 import type { AiRealtimeEmitter } from './ai-realtime-emitter.service';
 import { AiToolExecutor } from './tools/tool-executor';
 import type { PrismaService } from '../prisma/prisma.service';
+import { WalletReservationService } from '../wallet/wallet-reservation.service';
 
 jest.setTimeout(60000);
 
@@ -68,6 +69,7 @@ const outboundSender = new AiOutboundSenderService(
   emitter,
   { add: async () => undefined } as unknown as ConstructorParameters<typeof AiOutboundSenderService>[2],
 );
+const walletSvc = new WalletReservationService(P);
 const orchestrator = new AiOrchestratorService(
   P,
   config,
@@ -76,6 +78,7 @@ const orchestrator = new AiOrchestratorService(
   new AiToolExecutor(P),
   emitter,
   outboundSender,
+  walletSvc,
 );
 
 // --- Fabriques de réponses provider ----------------------------------------
@@ -148,9 +151,12 @@ beforeAll(async () => {
 afterAll(async () => {
   const org = ids.org;
   await prisma.aiToolCall.deleteMany({ where: { organizationId: org } });
+  await prisma.aiUsageEvent.deleteMany({ where: { organizationId: org } });
   await prisma.aiSuggestion.deleteMany({ where: { organizationId: org } });
   await prisma.conversationHandoff.deleteMany({ where: { organizationId: org } });
   await prisma.aiRun.deleteMany({ where: { organizationId: org } });
+  await prisma.walletTransaction.deleteMany({ where: { organizationId: org } });
+  await prisma.wallet.deleteMany({ where: { organizationId: org } });
   await prisma.message.deleteMany({ where: { organizationId: org } });
   await prisma.conversation.deleteMany({ where: { organizationId: org } });
   await prisma.inventoryItem.deleteMany({ where: { organizationId: org } });
@@ -241,6 +247,38 @@ describe('AiOrchestratorService — décisions (MockAiProvider scripté)', () =>
     expect(events.map((e) => e.event)).toEqual(
       expect.arrayContaining(['ai.run.started', 'ai.run.completed', 'ai.suggestion.created']),
     );
+  });
+
+  it('SUGGEST_REPLY avec réservation → DÉBITE le coût réel + libère (finalisation groupe 5)', async () => {
+    const wallet = await prisma.wallet.upsert({
+      where: { organizationId: ids.org },
+      update: { balanceCredits: 20, reservedCredits: 0, status: 'ACTIVE' },
+      create: { organizationId: ids.org, balanceCredits: 20, reservedCredits: 0 },
+      select: { id: true },
+    });
+    script = [suggestResp('Oui, en stock !')];
+    const { runId } = await newRun();
+    // Réservation RÉELLE avant génération (comme le fait AiTriggerService).
+    await prisma.$transaction((tx) =>
+      walletSvc.reserveForRunInTx(tx, {
+        organizationId: ids.org,
+        shopId: ids.shop,
+        walletId: wallet.id,
+        aiRunId: runId,
+        provider: 'MOCK',
+        requestedModel: 'mock-model',
+      }),
+    );
+
+    await orchestrator.runGeneration(runId);
+
+    expect((await runStatus(runId)).status).toBe('SUCCEEDED');
+    // 0 outil → 1 crédit débité ; réservation (3) intégralement libérée.
+    const w = await prisma.wallet.findUniqueOrThrow({ where: { id: wallet.id }, select: { balanceCredits: true, reservedCredits: true } });
+    expect(w).toMatchObject({ balanceCredits: 19, reservedCredits: 0 });
+    const usage = await prisma.aiUsageEvent.findUniqueOrThrow({ where: { aiRunId: runId }, select: { status: true, creditsCharged: true } });
+    expect(usage).toMatchObject({ status: 'CHARGED', creditsCharged: 1 });
+    expect(events.map((e) => e.event)).toContain('wallet.balance.updated');
   });
 
   it('HANDOFF → ConversationHandoff REQUESTED, aucune suggestion', async () => {

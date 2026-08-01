@@ -29,6 +29,8 @@ import { computeOpenState, type OpeningRange } from './tools/opening-hours';
 import { aiToolDefinitions } from './tools/tool-registry';
 import { AiToolExecutor } from './tools/tool-executor';
 import type { AiToolContext } from './tools/tool-types';
+import { WalletReservationService } from '../wallet/wallet-reservation.service';
+import type { AiRunBillableOutcome } from '@whauto/wallet';
 
 /** Le run a changé d'état sous nos pieds (supersede) : abandon propre. */
 class RunSupersededError extends Error {
@@ -76,6 +78,7 @@ export class AiOrchestratorService {
     private readonly toolExecutor: AiToolExecutor,
     private readonly realtime: AiRealtimeEmitter,
     private readonly outboundSender: AiOutboundSenderService,
+    private readonly walletReservation: WalletReservationService,
   ) {}
 
   /**
@@ -338,15 +341,28 @@ export class AiOrchestratorService {
     finalFinishReason: string,
     usedToolNames: string[],
   ): Promise<void> {
+    // Résultat de finalisation Wallet (groupe 5), renseigné DANS la transaction
+    // (closure) pour l'émission temps réel APRÈS commit.
+    let walletFin: { changed: boolean; walletId: string | null } | null = null;
+
     const outcome = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM conversations WHERE id = ${run.conversationId} FOR UPDATE`;
 
       const obsolete = await this.checkObsolete(tx, run, context.anchorCreatedAt);
       if (obsolete.superseded) {
-        await tx.aiRun.updateMany({
+        const superseded = await tx.aiRun.updateMany({
           where: { id: run.id, status: { in: [...ACTIVE_STATUSES] } },
           data: { status: 'SUPERSEDED', completedAt: new Date() },
         });
+        // Auto-supersession : libère la réservation dans la même transaction
+        // (aucun nouveau run ne l'a fait — sinon crédits gelés jusqu'au sweep).
+        if (superseded.count === 1) {
+          const released = await this.walletReservation.releaseRunReservationInTx(tx, {
+            organizationId: run.organizationId,
+            aiRunId: run.id,
+          });
+          walletFin = { changed: released.released, walletId: released.walletId };
+        }
         return { kind: 'SUPERSEDED' as const };
       }
 
@@ -366,6 +382,21 @@ export class AiOrchestratorService {
       if (finalized.count !== 1) {
         return { kind: 'SUPERSEDED' as const }; // Changé sous verrou.
       }
+
+      // Facturation atomique avec le statut terminal : l'issue facturable dérive
+      // de la DÉCISION IA (SUGGESTION → SUGGEST_REPLY, facturée par outils
+      // réussis, quel que soit l'auto-envoi/suppression ; HANDOFF/NO_REPLY → 0).
+      const billable: AiRunBillableOutcome =
+        decision.kind === 'SUGGESTION'
+          ? 'SUGGEST_REPLY'
+          : decision.kind === 'HANDOFF'
+            ? 'HANDOFF'
+            : 'NO_REPLY';
+      walletFin = await this.walletReservation.finalizeRunReservationInTx(tx, {
+        organizationId: run.organizationId,
+        aiRunId: run.id,
+        outcome: billable,
+      });
 
       // Mode effectif au moment du commit (env > config Shop) : c'est lui, pas
       // le mode figé au déclenchement, qui décide de l'auto-envoi.
@@ -493,7 +524,10 @@ export class AiOrchestratorService {
       return { kind: 'NO_REPLY' as const };
     });
 
-    // Émissions APRÈS commit uniquement — références seules.
+    // Émissions APRÈS commit uniquement — références seules. Le solde Wallet est
+    // publié dès qu'une finalisation a eu lieu (débit ou libération), y compris
+    // pour une auto-supersession.
+    await this.emitWalletBalance(run, walletFin);
     if (outcome.kind === 'SUPERSEDED') {
       return;
     }
@@ -507,6 +541,34 @@ export class AiOrchestratorService {
       this.emit(SOCKET_EVENTS.AI_HANDOFF_REQUESTED, run, { handoffId: outcome.handoffId });
     }
     this.logger.debug(`Run IA ${run.id} terminé : ${outcome.kind} (finish ${finalFinishReason}).`);
+  }
+
+  /**
+   * Publie `wallet.balance.updated` APRÈS commit si la finalisation a modifié le
+   * Wallet (débit et/ou libération). Best-effort : une émission échouée ne fait
+   * jamais échouer un run (le run est déjà terminé et committé).
+   */
+  private async emitWalletBalance(
+    run: RunRow,
+    walletFin: { changed: boolean; walletId: string | null } | null,
+  ): Promise<void> {
+    if (!walletFin?.changed || !walletFin.walletId) {
+      return;
+    }
+    try {
+      const payload = await this.walletReservation.buildBalanceEvent(
+        run.organizationId,
+        walletFin.walletId,
+        { conversationId: run.conversationId },
+      );
+      if (payload) {
+        this.realtime.emitToOrganization(run.organizationId, SOCKET_EVENTS.WALLET_BALANCE_UPDATED, payload);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Émission solde Wallet post-finalisation échouée : ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**
@@ -709,12 +771,25 @@ export class AiOrchestratorService {
   }
 
   private async finalizeFailed(run: RunRow, errorCode: string): Promise<void> {
-    const failed = await this.prisma.aiRun.updateMany({
-      where: { id: run.id, status: { in: [...ACTIVE_STATUSES] } },
-      data: { status: 'FAILED', completedAt: new Date(), errorCode },
+    let walletFin: { changed: boolean; walletId: string | null } | null = null;
+    const failedCount = await this.prisma.$transaction(async (tx) => {
+      const failed = await tx.aiRun.updateMany({
+        where: { id: run.id, status: { in: [...ACTIVE_STATUSES] } },
+        data: { status: 'FAILED', completedAt: new Date(), errorCode },
+      });
+      if (failed.count === 1) {
+        // FAILED → non facturable (0 crédit) : libère la réservation atomiquement.
+        walletFin = await this.walletReservation.finalizeRunReservationInTx(tx, {
+          organizationId: run.organizationId,
+          aiRunId: run.id,
+          outcome: 'FAILED',
+        });
+      }
+      return failed.count;
     });
-    if (failed.count === 1) {
+    if (failedCount === 1) {
       this.emit(SOCKET_EVENTS.AI_RUN_FAILED, run, { status: 'FAILED' });
+      await this.emitWalletBalance(run, walletFin);
     }
   }
 

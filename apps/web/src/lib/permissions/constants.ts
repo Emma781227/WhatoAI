@@ -64,6 +64,9 @@ export const PERMISSIONS = {
   AI_REJECT_SUGGESTION: 'ai.rejectSuggestion',
   AI_VIEW_RUNS: 'ai.viewRuns',
   AI_ENABLE_AUTO_REPLY: 'ai.enableAutoReply',
+  WALLET_READ: 'wallet.read',
+  WALLET_VIEW_LEDGER: 'wallet.viewLedger',
+  WALLET_TOP_UP: 'wallet.topUp',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

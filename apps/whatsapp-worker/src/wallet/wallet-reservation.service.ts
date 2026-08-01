@@ -1,9 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@whauto/database';
+import type { WalletRealtimeEvent } from '@whauto/shared';
 import {
+  aiUsageDebitKey,
   aiUsageReleaseKey,
   aiUsageReservationKey,
   availableCredits,
+  computeAiRunCredits,
   computeBalancesAfter,
   isTypeDirectionValid,
   MAX_CREDITS_PER_AI_RUN,
@@ -11,6 +14,7 @@ import {
   WalletInvariantViolationError,
   WalletNotFoundError,
   WalletSuspendedError,
+  type AiRunBillableOutcome,
   type WalletStatus,
   type WalletTransactionDirection,
   type WalletTransactionType,
@@ -270,6 +274,135 @@ export class WalletReservationService {
       select: { id: true },
     });
     return { released: !movement.replayed, walletId: usage.walletId };
+  }
+
+  /**
+   * FINALISE la réservation d'un run terminé (groupe 5), DANS la transaction qui
+   * pose le statut terminal du run. Débite le COÛT RÉEL (`computeAiRunCredits` —
+   * grille v1, basée sur les outils RÉUSSIS) et LIBÈRE la totalité de la
+   * réservation, sans double comptage : `balance -= coût`, `reserved -= réservé`.
+   *
+   * - GATE conditionnel `RESERVED → CHARGED|RELEASED` : rejeu / run déjà finalisé
+   *   → no-op strict (jamais de double débit).
+   * - Wallet non ACTIVE : on NE FACTURE PAS (favorable au marchand, jamais de
+   *   solde négatif) ; on libère la réservation si le Wallet le permet (CLOSED
+   *   bloque tout mouvement → réservation gelée avec le Wallet fermé).
+   * - Issues non facturables (HANDOFF/NO_REPLY/FAILED/SUPERSEDED) → coût 0,
+   *   simple libération.
+   */
+  async finalizeRunReservationInTx(
+    tx: PrismaTransaction,
+    params: { organizationId: string; aiRunId: string; outcome: AiRunBillableOutcome },
+  ): Promise<{ changed: boolean; walletId: string | null; creditsCharged: number }> {
+    const usage = await tx.aiUsageEvent.findUnique({
+      where: { aiRunId: params.aiRunId },
+      select: { id: true, walletId: true, status: true, creditsReserved: true, creditsCharged: true },
+    });
+    if (!usage || usage.status !== 'RESERVED') {
+      return { changed: false, walletId: usage?.walletId ?? null, creditsCharged: 0 };
+    }
+
+    // Base de tarification = outils RÉUSSIS (D5), source = AiToolCall SUCCEEDED.
+    const successfulToolCalls = await tx.aiToolCall.count({
+      where: { aiRunId: params.aiRunId, status: 'SUCCEEDED' },
+    });
+    const pricing = computeAiRunCredits({ outcome: params.outcome, successfulToolCalls });
+    const outstanding = usage.creditsReserved - usage.creditsCharged;
+    const charge = Math.min(pricing.creditsRequired, Math.max(0, outstanding));
+
+    const wallet = await this.lockAndReadWallet(tx, usage.walletId, params.organizationId);
+    const canCharge = wallet.status === 'ACTIVE';
+    const effectiveCharge = canCharge ? charge : 0;
+
+    // GATE : première finalisation seulement (RESERVED → CHARGED|RELEASED).
+    const target = effectiveCharge > 0 ? 'CHARGED' : 'RELEASED';
+    const gate = await tx.aiUsageEvent.updateMany({
+      where: { id: usage.id, status: 'RESERVED' },
+      data: {
+        status: target,
+        creditsCharged: effectiveCharge,
+        successfulToolCalls,
+        pricingVersion: pricing.pricingVersion,
+        reasonCode: canCharge ? pricing.reasonCode : 'NOT_BILLABLE_WALLET_INACTIVE',
+        action: params.outcome,
+        completedAt: new Date(),
+      },
+    });
+    if (gate.count !== 1) {
+      return { changed: false, walletId: usage.walletId, creditsCharged: 0 };
+    }
+
+    if (wallet.status === 'CLOSED') {
+      // Aucun mouvement possible ; la réservation reste gelée avec le Wallet fermé.
+      return { changed: true, walletId: usage.walletId, creditsCharged: 0 };
+    }
+
+    let debitTxId: string | null = null;
+    if (effectiveCharge > 0) {
+      const debit = await this.applyMovementInTx(tx, {
+        walletId: usage.walletId,
+        organizationId: params.organizationId,
+        type: 'AI_USAGE_DEBIT',
+        direction: 'DEBIT',
+        amountCredits: effectiveCharge,
+        referenceType: 'AI_RUN',
+        referenceId: params.aiRunId,
+        idempotencyKey: aiUsageDebitKey(params.aiRunId),
+        descriptionCode: 'AI_RUN_CHARGED',
+      });
+      debitTxId = debit.walletTransactionId;
+    }
+    if (outstanding > 0) {
+      await this.applyMovementInTx(tx, {
+        walletId: usage.walletId,
+        organizationId: params.organizationId,
+        type: 'AI_USAGE_RELEASE',
+        direction: 'RELEASE',
+        amountCredits: outstanding,
+        referenceType: 'AI_RUN',
+        referenceId: params.aiRunId,
+        idempotencyKey: aiUsageReleaseKey(params.aiRunId),
+        descriptionCode: 'AI_RUN_RESERVATION_SETTLED',
+      });
+    }
+    if (debitTxId) {
+      await tx.aiUsageEvent.update({
+        where: { id: usage.id },
+        data: { walletTransactionId: debitTxId },
+        select: { id: true },
+      });
+    }
+    return { changed: true, walletId: usage.walletId, creditsCharged: effectiveCharge };
+  }
+
+  /**
+   * Construit le payload temps réel `wallet.balance.updated` (soldes agrégés +
+   * `aiAvailable` dérivé). Aucun secret. Renvoie `null` si le Wallet est
+   * introuvable. Source UNIQUE de la forme du payload (trigger/orchestrateur/sweep).
+   */
+  async buildBalanceEvent(
+    organizationId: string,
+    walletId: string,
+    extra: Partial<Pick<WalletRealtimeEvent, 'conversationId' | 'requiredCredits'>> = {},
+  ): Promise<WalletRealtimeEvent | null> {
+    const wallet = await this.prisma.wallet.findUnique({
+      where: { id: walletId },
+      select: { balanceCredits: true, reservedCredits: true, status: true, version: true },
+    });
+    if (!wallet) {
+      return null;
+    }
+    const available = wallet.balanceCredits - wallet.reservedCredits;
+    return {
+      organizationId,
+      walletId,
+      balanceCredits: wallet.balanceCredits,
+      reservedCredits: wallet.reservedCredits,
+      availableCredits: available,
+      aiAvailable: wallet.status === 'ACTIVE' && available >= MAX_CREDITS_PER_AI_RUN,
+      version: wallet.version,
+      ...extra,
+    };
   }
 
   /**

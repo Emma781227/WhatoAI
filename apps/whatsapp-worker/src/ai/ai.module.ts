@@ -16,6 +16,7 @@ import { AiProcessProcessor } from './ai-process.processor';
 import { AiProviderFactory } from './ai-provider.factory';
 import { AiRealtimeEmitter } from './ai-realtime-emitter.service';
 import { AiRecoveryService } from './ai-recovery.service';
+import { AiReservationSweepService } from './ai-reservation-sweep.service';
 import { AiSchedulingService } from './ai-scheduling.service';
 import { AiTriggerService } from './ai-trigger.service';
 import { AiToolExecutor } from './tools/tool-executor';
@@ -36,6 +37,7 @@ import { WalletReservationService } from '../wallet/wallet-reservation.service';
     AiSchedulingService,
     AiProcessProcessor,
     AiRecoveryService,
+    AiReservationSweepService,
     AiToolExecutor,
     AiContextService,
     AiProviderFactory,

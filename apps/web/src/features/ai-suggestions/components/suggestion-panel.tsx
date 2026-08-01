@@ -1,11 +1,13 @@
 'use client';
 
 import { Loader2, Sparkles } from 'lucide-react';
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { useWallet } from '@/features/wallet/use-wallet';
 import { ApiError, getErrorMessage } from '@/lib/api/api-error';
 import { usePermissions } from '@/lib/permissions/use-permissions';
 import { PERMISSIONS } from '@/lib/permissions/constants';
@@ -43,6 +45,10 @@ export function SuggestionPanel({
   const canReject = can(PERMISSIONS.AI_REJECT_SUGGESTION);
 
   const suggestionsQuery = useAiSuggestions(conversationId, canRead);
+  const walletQuery = useWallet();
+  // Optimiste : tant que le solde n'est pas chargé, on n'entrave pas (le serveur
+  // reste l'autorité — un 409 INSUFFICIENT_CREDITS est géré à la génération).
+  const aiAvailable = walletQuery.data?.aiAvailable ?? true;
   const generateMutation = useGenerateSuggestion(conversationId);
   const acceptMutation = useAcceptSuggestion(conversationId);
   const rejectMutation = useRejectSuggestion(conversationId);
@@ -100,6 +106,10 @@ export function SuggestionPanel({
           setHandoff(true);
           return;
         }
+        if (error instanceof ApiError && error.code === 'INSUFFICIENT_CREDITS') {
+          toast.error('Crédits IA insuffisants — rechargez pour générer une suggestion.');
+          return;
+        }
         toast.error(getErrorMessage(error));
       },
     });
@@ -146,16 +156,26 @@ export function SuggestionPanel({
           Suggestion IA
         </span>
         {canSuggest && !pending && !generating ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => runGenerate(false)}
-            data-testid="ai-generate"
-          >
-            Générer
-          </Button>
+          aiAvailable ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => runGenerate(false)}
+              data-testid="ai-generate"
+            >
+              Générer
+            </Button>
+          ) : (
+            <Link
+              href="/billing"
+              className="text-xs font-medium text-amber-700 underline-offset-2 hover:underline dark:text-amber-400"
+              data-testid="ai-insufficient-credits"
+            >
+              Crédits insuffisants — Recharger
+            </Link>
+          )
         ) : null}
       </div>
 

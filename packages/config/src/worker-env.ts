@@ -47,6 +47,12 @@ export const workerEnvSchema = baseEnvSchema.extend({
   // Âge minimum avant sweep : laisse passer la fenêtre de debounce + une marge,
   // pour ne pas doubler le chemin normal ni traiter un message encore « chaud ».
   AI_RECOVERY_MIN_MESSAGE_AGE_MS: z.coerce.number().int().positive().default(15000),
+
+  // Billing IA — sweep comptable des réservations (groupe 5) : réconcilie toute
+  // réservation RESERVED dont le run est déjà TERMINAL (ex. run passé FAILED en
+  // masse par le sweep de récupération) en libérant les crédits. Filet de
+  // sécurité de l'invariant « aucune réservation active pour un run terminé ».
+  AI_RESERVATION_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
 });
 
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

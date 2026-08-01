@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Injectable } from '@nestjs/common';
-import { NotFoundError } from '@whauto/shared';
+import { NotFoundError, SOCKET_EVENTS } from '@whauto/shared';
 import { MockPaymentDisabledError, type PaymentSession } from '@whauto/payments';
 import {
   canTransitionTopUp,
@@ -15,6 +15,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuditActionContext } from '../modules/organizations/organization-audit.service';
 import { OrganizationAuditService } from '../modules/organizations/organization-audit.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { PaymentProviderFactory } from './payment-provider.factory';
 import { WalletService } from './wallet.service';
 
@@ -25,6 +26,7 @@ export interface TopUpPublic {
   currency: string;
   creditsGranted: number;
   bonusCredits: number;
+  provider: string;
   createdAt: string;
 }
 
@@ -52,6 +54,7 @@ export class TopUpService {
     private readonly walletService: WalletService,
     private readonly audit: OrganizationAuditService,
     private readonly payments: PaymentProviderFactory,
+    private readonly realtime: RealtimeService,
   ) {}
 
   /** Crée un TopUp PENDING (valeurs figées) + ouvre une session de paiement. */
@@ -234,7 +237,16 @@ export class TopUpService {
     if (!owned) {
       throw new NotFoundError('Top-up not found.');
     }
-    return this.creditTopUp(topUpId, context);
+    const result = await this.creditTopUp(topUpId, context);
+    // Solde temps réel APRÈS commit, uniquement si un crédit a réellement eu lieu
+    // (jamais sur un rejeu idempotent). Best-effort : n'échoue jamais la recharge.
+    if (!result.alreadyPaid) {
+      const payload = await this.walletService.getBalanceEvent(organizationId);
+      if (payload) {
+        this.realtime.emitToOrganization(organizationId, SOCKET_EVENTS.WALLET_BALANCE_UPDATED, payload);
+      }
+    }
+    return result;
   }
 }
 
@@ -245,6 +257,7 @@ const TOPUP_SELECT = {
   currency: true,
   creditsGranted: true,
   bonusCredits: true,
+  provider: true,
   createdAt: true,
 } satisfies import('@whauto/database').Prisma.TopUpSelect;
 
@@ -255,6 +268,7 @@ function toTopUpPublic(row: {
   currency: string;
   creditsGranted: number;
   bonusCredits: number;
+  provider: string;
   createdAt: Date;
 }): TopUpPublic {
   return {
@@ -264,6 +278,7 @@ function toTopUpPublic(row: {
     currency: row.currency,
     creditsGranted: row.creditsGranted,
     bonusCredits: row.bonusCredits,
+    provider: row.provider,
     createdAt: row.createdAt.toISOString(),
   };
 }

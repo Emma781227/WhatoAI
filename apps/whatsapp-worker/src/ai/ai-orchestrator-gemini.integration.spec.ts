@@ -13,6 +13,7 @@ import type { AiProviderFactory } from './ai-provider.factory';
 import type { AiRealtimeEmitter } from './ai-realtime-emitter.service';
 import { AiToolExecutor } from './tools/tool-executor';
 import type { PrismaService } from '../prisma/prisma.service';
+import { WalletReservationService } from '../wallet/wallet-reservation.service';
 
 /**
  * Orchestrateur exercé avec le VRAI GeminiAiProvider pointé vers un faux serveur
@@ -118,7 +119,7 @@ const outboundSender = new AiOutboundSenderService(
   emitter,
   { add: async () => undefined } as unknown as ConstructorParameters<typeof AiOutboundSenderService>[2],
 );
-const orchestrator = new AiOrchestratorService(P, config, new AiContextService(P), factory, new AiToolExecutor(P), emitter, outboundSender);
+const orchestrator = new AiOrchestratorService(P, config, new AiContextService(P), factory, new AiToolExecutor(P), emitter, outboundSender, new WalletReservationService(P));
 
 const ids: Record<string, string> = {};
 const SUFFIX = `aigem-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;

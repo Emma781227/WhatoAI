@@ -12,6 +12,7 @@ import {
   ShoppingCart,
   Store,
   Users,
+  Wallet,
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
@@ -36,6 +37,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: messages.nav.products, href: '/products', icon: Package },
   { label: 'Inventaire', href: '/inventory', icon: Boxes },
   { label: messages.nav.orders, href: '/orders', icon: ShoppingCart },
+  { label: 'Crédits', href: '/billing', icon: Wallet },
   { label: messages.nav.automations, icon: Workflow, comingSoon: true },
   { label: messages.nav.aiAgent, icon: Bot, comingSoon: true },
   { label: messages.nav.shops, href: '/shops', icon: Store },

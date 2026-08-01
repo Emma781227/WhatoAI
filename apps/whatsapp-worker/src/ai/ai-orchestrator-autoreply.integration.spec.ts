@@ -11,6 +11,7 @@ import type { AiProviderFactory } from './ai-provider.factory';
 import type { AiRealtimeEmitter } from './ai-realtime-emitter.service';
 import { AiToolExecutor } from './tools/tool-executor';
 import type { PrismaService } from '../prisma/prisma.service';
+import { WalletReservationService } from '../wallet/wallet-reservation.service';
 
 /**
  * Tests d'INTÉGRATION du chemin AUTO_REPLY (sous-phase C, C2) contre la vraie
@@ -74,6 +75,7 @@ const orchestrator = new AiOrchestratorService(
   new AiToolExecutor(P),
   emitter,
   outboundSender,
+  new WalletReservationService(P),
 );
 
 function resp(partial: Partial<AiProviderResponse> & { text: string | null }): AiProviderResponse {

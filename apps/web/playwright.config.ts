@@ -39,6 +39,10 @@ export default defineConfig({
         ENABLE_MOCK_WHATSAPP_ENDPOINTS: 'true',
         WHATSAPP_JOB_ATTEMPTS: '2',
         WHATSAPP_JOB_BACKOFF_MS: '300',
+        // Crédits/Wallet : provider de paiement simulé autorisé en test (jamais
+        // en production — forcé false par Zod). Permet mock-confirm côté e2e.
+        PAYMENT_PROVIDER: 'MOCK',
+        ALLOW_MOCK_PAYMENTS: 'true',
         AUTH_RATE_LIMIT_LOGIN_MAX: '1000',
         AUTH_RATE_LIMIT_REGISTER_MAX: '1000',
         AUTH_RATE_LIMIT_REFRESH_MAX: '1000',

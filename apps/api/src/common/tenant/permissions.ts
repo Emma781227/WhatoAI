@@ -96,6 +96,14 @@ export const PERMISSIONS = {
   AI_VIEW_RUNS: 'ai.viewRuns',
   /** Réservée — AUTO_REPLY non activable fonctionnellement dans cette phase. */
   AI_ENABLE_AUTO_REPLY: 'ai.enableAutoReply',
+  // Wallet / crédits IA (module Billing — groupe API). Le solde pilote la
+  // disponibilité de l'IA ; l'AGENT ne voit QUE availableCredits + aiAvailable
+  // (D7), jamais le détail comptable ni la recharge.
+  WALLET_READ: 'wallet.read',
+  /** Historique comptable (ledger + consommation IA) — détail financier, MANAGER+. */
+  WALLET_VIEW_LEDGER: 'wallet.viewLedger',
+  /** Acheter des crédits (packs + recharges + confirmation) — engagement financier, OWNER/ADMIN. */
+  WALLET_TOP_UP: 'wallet.topUp',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -163,6 +171,9 @@ const ADMIN_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.AI_REJECT_SUGGESTION,
   PERMISSIONS.AI_VIEW_RUNS,
   PERMISSIONS.AI_ENABLE_AUTO_REPLY,
+  PERMISSIONS.WALLET_READ,
+  PERMISSIONS.WALLET_VIEW_LEDGER,
+  PERMISSIONS.WALLET_TOP_UP,
 ];
 
 const MANAGER_PERMISSIONS: readonly Permission[] = [
@@ -222,6 +233,10 @@ const MANAGER_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.AI_ACCEPT_SUGGESTION,
   PERMISSIONS.AI_REJECT_SUGGESTION,
   PERMISSIONS.AI_VIEW_RUNS,
+  // Wallet : le MANAGER voit le solde ET l'historique comptable, mais n'achète
+  // pas de crédits (wallet.topUp = OWNER/ADMIN, engagement financier).
+  PERMISSIONS.WALLET_READ,
+  PERMISSIONS.WALLET_VIEW_LEDGER,
 ];
 
 // AGENT : lit et répond à toutes les conversations de l'org (matrice plate
@@ -266,6 +281,9 @@ const AGENT_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.AI_SUGGEST,
   PERMISSIONS.AI_ACCEPT_SUGGESTION,
   PERMISSIONS.AI_REJECT_SUGGESTION,
+  // Wallet : l'AGENT voit UNIQUEMENT availableCredits + aiAvailable (D7 — le DTO
+  // masque le détail comptable côté serveur) ; jamais le ledger ni la recharge.
+  PERMISSIONS.WALLET_READ,
 ];
 
 export const ROLE_PERMISSIONS: Readonly<Record<MembershipRole, readonly Permission[]>> = {

@@ -66,6 +66,7 @@ interface Mocks {
     reserveForRunInTx: jest.Mock;
     releaseRunReservationInTx: jest.Mock;
     recordSkippedForRunInTx: jest.Mock;
+    buildBalanceEvent: jest.Mock;
   };
   emitter: { emitToOrganization: jest.Mock };
 }
@@ -120,6 +121,18 @@ function build(
       }),
       releaseRunReservationInTx: jest.fn().mockResolvedValue({ released: true, walletId: 'wallet-1' }),
       recordSkippedForRunInTx: jest.fn().mockResolvedValue(undefined),
+      buildBalanceEvent: jest.fn(
+        async (organizationId: string, walletId: string, extra: Record<string, unknown> = {}) => ({
+          organizationId,
+          walletId,
+          balanceCredits: options.availableCredits ?? 10,
+          reservedCredits: 3,
+          availableCredits: (options.availableCredits ?? 10) - 3,
+          aiAvailable: (options.walletStatus ?? 'ACTIVE') === 'ACTIVE',
+          version: 1,
+          ...extra,
+        }),
+      ),
     },
     emitter: { emitToOrganization: jest.fn() },
   };

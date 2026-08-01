@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@whauto/database';
+import type { WalletRealtimeEvent } from '@whauto/shared';
 import {
   aiUsageReleaseKey,
   availableCredits,
   computeBalancesAfter,
   isTypeDirectionValid,
+  MAX_CREDITS_PER_AI_RUN,
   WalletClosedError,
   WalletInvariantViolationError,
   WalletNotFoundError,
@@ -229,6 +231,30 @@ export class WalletService {
   /** Applique un mouvement dans sa propre transaction (mouvement isolé). */
   async creditWallet(movement: WalletMovementInput): Promise<WalletMovementResult> {
     return this.prisma.$transaction((tx) => this.applyMovementInTx(tx, movement));
+  }
+
+  /**
+   * Payload temps réel `wallet.balance.updated` (soldes agrégés + `aiAvailable`
+   * dérivé). Miroir de la version worker — aucun secret. `null` si aucun Wallet.
+   */
+  async getBalanceEvent(organizationId: string): Promise<WalletRealtimeEvent | null> {
+    const wallet = await this.prisma.wallet.findUnique({
+      where: { organizationId },
+      select: WALLET_SELECT,
+    });
+    if (!wallet) {
+      return null;
+    }
+    const available = availableCredits(wallet);
+    return {
+      organizationId,
+      walletId: wallet.id,
+      balanceCredits: wallet.balanceCredits,
+      reservedCredits: wallet.reservedCredits,
+      availableCredits: available,
+      aiAvailable: wallet.status === 'ACTIVE' && available >= MAX_CREDITS_PER_AI_RUN,
+      version: wallet.version,
+    };
   }
 
   /**

@@ -7,6 +7,7 @@ import { CreditPackageInactiveError, CreditPackageNotFoundError } from '@whauto/
 
 import type { PrismaService } from '../prisma/prisma.service';
 import { OrganizationAuditService } from '../modules/organizations/organization-audit.service';
+import type { RealtimeService } from '../realtime/realtime.service';
 import { PaymentProviderFactory } from './payment-provider.factory';
 import { TopUpService } from './topup.service';
 import { WalletService } from './wallet.service';
@@ -34,7 +35,12 @@ const config = {
   get: (key: string) => ({ PAYMENT_PROVIDER: 'MOCK', ALLOW_MOCK_PAYMENTS: true })[key],
 } as unknown as ConfigService;
 const factory = new PaymentProviderFactory(config);
-const topups = new TopUpService(P, wallet, audit, factory);
+const emittedEvents: Array<{ event: string; payload: unknown }> = [];
+const realtime = {
+  emitToOrganization: (_org: string, event: string, payload: unknown) =>
+    emittedEvents.push({ event, payload }),
+} as unknown as RealtimeService;
+const topups = new TopUpService(P, wallet, audit, factory, realtime);
 
 const SUFFIX = `topup-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 const ctx = { userAgent: 'jest', ipAddress: '127.0.0.1' };
@@ -168,7 +174,7 @@ describe('TopUpService — erreurs & garde MOCK', () => {
     const disabledFactory = new PaymentProviderFactory({
       get: (key: string) => ({ PAYMENT_PROVIDER: 'MOCK', ALLOW_MOCK_PAYMENTS: false })[key],
     } as unknown as ConfigService);
-    const disabledTopUps = new TopUpService(P, wallet, audit, disabledFactory);
+    const disabledTopUps = new TopUpService(P, wallet, audit, disabledFactory, realtime);
     await expect(disabledTopUps.mockConfirm(orgId, topUp.id, ctx)).rejects.toBeInstanceOf(MockPaymentDisabledError);
   });
 

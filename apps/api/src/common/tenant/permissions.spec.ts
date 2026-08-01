@@ -70,6 +70,14 @@ describe('permissions', () => {
       PERMISSIONS.ORDERS_ADD_NOTE,
       PERMISSIONS.ORDERS_VIEW_HISTORY,
       PERMISSIONS.ORDERS_VIEW_COST,
+      PERMISSIONS.AI_READ,
+      PERMISSIONS.AI_CONFIGURE,
+      PERMISSIONS.AI_SUGGEST,
+      PERMISSIONS.AI_ACCEPT_SUGGESTION,
+      PERMISSIONS.AI_REJECT_SUGGESTION,
+      PERMISSIONS.AI_VIEW_RUNS,
+      PERMISSIONS.WALLET_READ,
+      PERMISSIONS.WALLET_VIEW_LEDGER,
     ]);
   });
 
@@ -98,7 +106,24 @@ describe('permissions', () => {
       PERMISSIONS.ORDERS_UPDATE_STATUS,
       PERMISSIONS.ORDERS_ADD_NOTE,
       PERMISSIONS.ORDERS_VIEW_HISTORY,
+      PERMISSIONS.AI_READ,
+      PERMISSIONS.AI_SUGGEST,
+      PERMISSIONS.AI_ACCEPT_SUGGESTION,
+      PERMISSIONS.AI_REJECT_SUGGESTION,
+      PERMISSIONS.WALLET_READ,
     ]);
+  });
+
+  it('wallet : lecture pour tous, ledger MANAGER+, recharge OWNER/ADMIN (D7)', () => {
+    for (const role of ALL_ROLES) {
+      expect(hasPermission(role, PERMISSIONS.WALLET_READ)).toBe(true);
+    }
+    expect(hasPermission('AGENT', PERMISSIONS.WALLET_VIEW_LEDGER)).toBe(false);
+    expect(hasPermission('MANAGER', PERMISSIONS.WALLET_VIEW_LEDGER)).toBe(true);
+    expect(hasPermission('AGENT', PERMISSIONS.WALLET_TOP_UP)).toBe(false);
+    expect(hasPermission('MANAGER', PERMISSIONS.WALLET_TOP_UP)).toBe(false);
+    expect(hasPermission('ADMIN', PERMISSIONS.WALLET_TOP_UP)).toBe(true);
+    expect(hasPermission('OWNER', PERMISSIONS.WALLET_TOP_UP)).toBe(true);
   });
 
   it('AGENT n’a jamais orders.cancel ni orders.export (validé D10)', () => {

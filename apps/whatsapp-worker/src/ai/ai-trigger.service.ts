@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { type AiMode, type AiProviderType, Prisma } from '@whauto/database';
-import { SOCKET_EVENTS, type AiProcessMessageJobData, type WalletRealtimeEvent } from '@whauto/shared';
+import { SOCKET_EVENTS, type AiProcessMessageJobData } from '@whauto/shared';
 import { MAX_CREDITS_PER_AI_RUN } from '@whauto/wallet';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -401,25 +401,13 @@ export class AiTriggerService {
     // émission en échec (Redis KO) ne doit JAMAIS faire échouer le run — le
     // recovery/refetch réconcilie. Aucune libération ici.
     try {
-      const wallet = await this.prisma.wallet.findUnique({
-        where: { id: walletId },
-        select: { balanceCredits: true, reservedCredits: true, status: true, version: true },
-      });
-      if (!wallet) {
-        return;
-      }
-      const available = wallet.balanceCredits - wallet.reservedCredits;
-      const payload: WalletRealtimeEvent = {
-        organizationId: data.organizationId,
-        walletId,
-        balanceCredits: wallet.balanceCredits,
-        reservedCredits: wallet.reservedCredits,
-        availableCredits: available,
-        aiAvailable: wallet.status === 'ACTIVE' && available >= MAX_CREDITS_PER_AI_RUN,
-        version: wallet.version,
+      const payload = await this.walletReservation.buildBalanceEvent(data.organizationId, walletId, {
         conversationId: data.conversationId,
         ...(emit === 'INSUFFICIENT' ? { requiredCredits: MAX_CREDITS_PER_AI_RUN } : {}),
-      };
+      });
+      if (!payload) {
+        return;
+      }
       const event =
         emit === 'INSUFFICIENT'
           ? SOCKET_EVENTS.WALLET_INSUFFICIENT
