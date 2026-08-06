@@ -25,4 +25,13 @@ export const paymentEnvFields = {
   GENIUS_PAY_RETURN_URL: optionalUrl(),
   GENIUS_PAY_CANCEL_URL: optionalUrl(),
   PAYMENT_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+
+  // Reconciliation (D3) : rattrape les webhooks perdus en sondant les TopUp
+  // PENDING/PROCESSING via getPaymentStatus, et rejoue les événements durable
+  // inbox coincés. Le crédit passe TOUJOURS par creditTopUp (idempotent).
+  PAYMENT_RECONCILIATION_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(120000),
+  // Âge minimum avant de sonder un TopUp (laisse le webhook arriver d'abord).
+  PAYMENT_RECONCILIATION_MIN_AGE_MS: z.coerce.number().int().positive().default(60000),
+  // Au-delà : un TopUp jamais finalisé est abandonné (EXPIRED) pour ne pas sonder indéfiniment.
+  PAYMENT_RECONCILIATION_MAX_AGE_MS: z.coerce.number().int().positive().default(86400000),
 } as const;

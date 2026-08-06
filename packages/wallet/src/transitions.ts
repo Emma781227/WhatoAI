@@ -56,17 +56,22 @@ export function isTypeDirectionValid(
 }
 
 /**
- * Transitions de statut d'un TopUp. Un TopUp terminal (PAID/FAILED/CANCELLED/
- * EXPIRED) n'est jamais recyclé : une nouvelle tentative crée un NOUVEAU TopUp.
- * Un TopUp PAID ne peut jamais redevenir PENDING (le Wallet est crédité une fois).
+ * Transitions de statut d'un TopUp (machine D5). Un TopUp FAILED/CANCELLED/
+ * EXPIRED est terminal pour CETTE tentative (une nouvelle tentative crée un
+ * NOUVEAU TopUp). PAID ne redevient jamais PENDING (le Wallet est crédité une
+ * fois) ; seul un remboursement provider le fait passer REFUNDED (terminal).
+ * REVIEW_REQUIRED (D4 : montant/devise ≠ figé sur un `completed`) est un état de
+ * revue manuelle — jamais crédité automatiquement, sans transition automatique.
  */
 export const TOPUP_STATUS_TRANSITIONS: Readonly<Record<TopUpStatus, readonly TopUpStatus[]>> = {
-  PENDING: ['PROCESSING', 'PAID', 'FAILED', 'CANCELLED', 'EXPIRED'],
-  PROCESSING: ['PAID', 'FAILED', 'CANCELLED', 'EXPIRED'],
-  PAID: [],
+  PENDING: ['PROCESSING', 'PAID', 'FAILED', 'CANCELLED', 'EXPIRED', 'REVIEW_REQUIRED'],
+  PROCESSING: ['PAID', 'FAILED', 'CANCELLED', 'EXPIRED', 'REVIEW_REQUIRED'],
+  PAID: ['REFUNDED'],
   FAILED: [],
   CANCELLED: [],
   EXPIRED: [],
+  REFUNDED: [],
+  REVIEW_REQUIRED: [],
 };
 
 export function canTransitionTopUp(from: TopUpStatus, to: TopUpStatus): boolean {

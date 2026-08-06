@@ -5,6 +5,7 @@ import { TenantGuard } from '../common/tenant/tenant.guard';
 import { AuthModule } from '../modules/auth/auth.module';
 import { OrganizationsModule } from '../modules/organizations/organizations.module';
 import { PaymentProviderFactory } from './payment-provider.factory';
+import { PaymentReconciliationService } from './payment-reconciliation.service';
 import { TopUpService } from './topup.service';
 import { WalletController } from './wallet.controller';
 import { WalletQueryService } from './wallet-query.service';
@@ -24,6 +25,7 @@ import { WalletService } from './wallet.service';
     WalletQueryService,
     TopUpService,
     PaymentProviderFactory,
+    PaymentReconciliationService,
     TenantGuard,
     PermissionsGuard,
   ],

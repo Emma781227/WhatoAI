@@ -28,8 +28,15 @@ export interface PaymentProvider {
    * Vérifie la signature d'un webhook (autorité cryptographique unique). Le
    * `returnUrl` du navigateur ne prouve JAMAIS un paiement — seuls le webhook
    * signé ou une vérification serveur (`getPaymentStatus`) le confirment.
+   *
+   * Forme objet : certains agrégateurs (Genius Pay) signent `timestamp + "." +
+   * corps` — la vérification a besoin du timestamp, pas seulement du corps brut.
    */
-  verifyWebhookSignature(rawBody: string, signature: string | undefined): boolean;
+  verifyWebhookSignature(input: {
+    rawBody: string | undefined;
+    signature: string | undefined;
+    timestamp: string | undefined;
+  }): boolean;
 
   /** Vérifie la config (aucun paiement réel effectué). */
   validateConfiguration(): Promise<{ ok: boolean }>;

@@ -96,6 +96,21 @@ export const apiEnvSchema = baseEnvSchema.extend({
       message: 'ALLOW_MOCK_PAYMENTS ne doit jamais être actif en production.',
     });
   }
+  // Fail-fast Genius Pay (D6) : n'exige QUE les variables réellement nécessaires
+  // selon la doc officielle — auth marchand (clé publique/secrète) + secret
+  // webhook dédié. La valeur n'est JAMAIS affichée (seul le nom apparaît).
+  if (env.PAYMENT_PROVIDER === 'GENIUS_PAY') {
+    const required = ['GENIUS_PAY_API_KEY', 'GENIUS_PAY_SECRET_KEY', 'GENIUS_PAY_WEBHOOK_SECRET'] as const;
+    for (const key of required) {
+      if (!env[key]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `${key} est requis quand PAYMENT_PROVIDER=GENIUS_PAY.`,
+        });
+      }
+    }
+  }
 });
 
 export type ApiEnv = z.infer<typeof apiEnvSchema>;

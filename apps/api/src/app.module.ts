@@ -24,6 +24,7 @@ import { ShopsModule } from './modules/shops/shops.module';
 import { WhatsAppChannelsModule } from './modules/whatsapp-channels/whatsapp-channels.module';
 import { WhatsAppInboundModule } from './modules/whatsapp-inbound/whatsapp-inbound.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
+import { PaymentWebhooksModule } from './modules/payment-webhooks/payment-webhooks.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RealtimeModule } from './realtime/realtime.module';
 
@@ -58,6 +59,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     WhatsAppChannelsModule,
     WhatsAppInboundModule,
     WebhooksModule,
+    PaymentWebhooksModule,
     ContactsModule,
     ConversationsModule,
     CategoriesModule,

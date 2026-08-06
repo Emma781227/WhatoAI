@@ -23,7 +23,7 @@ describe('MockPaymentProvider', () => {
 
   it('parseWebhook normalise le corps sans planter', () => {
     const event = provider.parseWebhook(JSON.stringify({ providerPaymentId: 'p1', status: 'PAID', reference: 'r1' }));
-    expect(event).toEqual({ providerPaymentId: 'p1', status: 'PAID', reference: 'r1' });
+    expect(event).toMatchObject({ providerPaymentId: 'p1', status: 'PAID', reference: 'r1' });
   });
 
   it('validateConfiguration ok et nom de provider MOCK', async () => {

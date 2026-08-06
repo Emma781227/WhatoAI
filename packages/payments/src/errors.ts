@@ -31,3 +31,15 @@ export class MockPaymentDisabledError extends DomainError {
     this.name = 'MockPaymentDisabledError';
   }
 }
+
+/**
+ * 401 : signature de webhook paiement invalide ou absente. Le `returnUrl` du
+ * navigateur ne prouve JAMAIS un paiement — seul un webhook signé (ou une
+ * vérification serveur) confirme. Aucun secret n'est jamais exposé.
+ */
+export class PaymentWebhookSignatureError extends DomainError {
+  constructor() {
+    super('Invalid payment webhook signature.', 'PAYMENT_WEBHOOK_SIGNATURE_INVALID', 401);
+    this.name = 'PaymentWebhookSignatureError';
+  }
+}

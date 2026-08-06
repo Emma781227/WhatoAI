@@ -32,24 +32,32 @@ export class MockPaymentProvider implements PaymentProvider {
   async getPaymentStatus(providerPaymentId: string): Promise<PaymentStatusResult> {
     // Le mock ne connaît pas l'état réel : la confirmation vient de l'endpoint
     // mock-confirm explicite, pas d'un sondage du provider.
-    return { providerPaymentId, status: 'PENDING', reference: null };
+    return { providerPaymentId, status: 'PENDING', reference: null, amount: null, currency: null };
   }
 
   parseWebhook(rawBody: string): PaymentWebhookEvent {
     const parsed = JSON.parse(rawBody) as {
+      externalEventId?: string;
+      eventType?: string;
       providerPaymentId?: string;
       status?: PaymentWebhookEvent['status'];
       reference?: string | null;
+      amount?: number | null;
+      currency?: string | null;
     };
     return {
+      externalEventId: parsed.externalEventId ?? '',
+      eventType: parsed.eventType ?? '',
       providerPaymentId: parsed.providerPaymentId ?? '',
       status: parsed.status ?? 'PENDING',
       reference: parsed.reference ?? null,
+      amount: parsed.amount ?? null,
+      currency: parsed.currency ?? null,
     };
   }
 
   verifyWebhookSignature(): boolean {
-    // MOCK : pas de signature réelle. GeniusPayProvider implémentera un HMAC réel.
+    // MOCK : pas de signature réelle. GeniusPayProvider implémente un HMAC réel.
     return true;
   }
 

@@ -48,7 +48,15 @@ export interface CreditPackage {
 
 export interface TopUp {
   id: string;
-  status: 'PENDING' | 'PROCESSING' | 'PAID' | 'FAILED' | 'CANCELLED' | 'EXPIRED';
+  status:
+    | 'PENDING'
+    | 'PROCESSING'
+    | 'PAID'
+    | 'FAILED'
+    | 'CANCELLED'
+    | 'EXPIRED'
+    | 'REFUNDED'
+    | 'REVIEW_REQUIRED';
   amountMinor: number;
   currency: string;
   creditsGranted: number;
@@ -113,6 +121,9 @@ export const walletApi = {
   listTopUps(org: string, params: PageQuery = {}) {
     return apiRequest<Paged<TopUp>>(`/organizations/${org}/wallet/top-ups${query(params)}`);
   },
+  getTopUp(org: string, topUpId: string) {
+    return apiRequest<TopUp>(`/organizations/${org}/wallet/top-ups/${topUpId}`);
+  },
   mockConfirm(org: string, topUpId: string) {
     return apiRequest<{ topUpId: string; status: string; alreadyPaid: boolean; balanceAfterCredits: number }>(
       `/organizations/${org}/wallet/top-ups/${topUpId}/mock-confirm`,
@@ -121,6 +132,16 @@ export const walletApi = {
   },
 };
 
+/** Statuts TopUp terminaux : le polling s'arrête, le backend a tranché. */
+export const TERMINAL_TOPUP_STATUSES: ReadonlyArray<TopUp['status']> = [
+  'PAID',
+  'FAILED',
+  'CANCELLED',
+  'EXPIRED',
+  'REFUNDED',
+  'REVIEW_REQUIRED',
+];
+
 export const walletKeys = {
   all: (org: string) => ['wallet', org] as const,
   balance: (org: string) => ['wallet', org, 'balance'] as const,
@@ -128,4 +149,5 @@ export const walletKeys = {
   usage: (org: string, params: PageQuery) => ['wallet', org, 'usage', params] as const,
   packages: (org: string) => ['wallet', org, 'packages'] as const,
   topUps: (org: string, params: PageQuery) => ['wallet', org, 'top-ups', params] as const,
+  topUp: (org: string, topUpId: string) => ['wallet', org, 'top-up', topUpId] as const,
 };

@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { NotFoundError, SOCKET_EVENTS } from '@whauto/shared';
-import { MockPaymentDisabledError, type PaymentSession } from '@whauto/payments';
+import {
+  checkPaymentAmount,
+  MockPaymentDisabledError,
+  type PaymentSession,
+  type PaymentStatus,
+} from '@whauto/payments';
 import {
   canTransitionTopUp,
   CreditPackageInactiveError,
@@ -11,6 +16,7 @@ import {
   TopUpNotFoundError,
   topUpCreditKey,
 } from '@whauto/wallet';
+import type { TopUpStatus } from '@whauto/database';
 
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuditActionContext } from '../modules/organizations/organization-audit.service';
@@ -49,6 +55,8 @@ export interface CreditResult {
  */
 @Injectable()
 export class TopUpService {
+  private readonly logger = new Logger(TopUpService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
@@ -133,7 +141,8 @@ export class TopUpService {
    * transaction. Un webhook/confirmation rejoué ne crédite jamais deux fois.
    */
   async creditTopUp(topUpId: string, context: AuditActionContext): Promise<CreditResult> {
-    return this.prisma.$transaction(async (tx) => {
+    let organizationId: string | null = null;
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM topups WHERE id = ${topUpId} FOR UPDATE`;
       const topUp = await tx.topUp.findUnique({
         where: { id: topUpId },
@@ -151,6 +160,7 @@ export class TopUpService {
       if (!topUp) {
         throw new TopUpNotFoundError();
       }
+      organizationId = topUp.organizationId;
       if (topUp.status === 'PAID') {
         // Déjà crédité : no-op idempotent (jamais un second crédit).
         return {
@@ -215,6 +225,15 @@ export class TopUpService {
         balanceAfterCredits: movement.balanceAfterCredits,
       };
     });
+
+    // Émission APRÈS commit, uniquement sur un crédit RÉEL (jamais sur rejeu) —
+    // source UNIQUE du temps réel pour tous les chemins de crédit (webhook, mock,
+    // reconciliation). Si le Wallet était insuffisant, l'IA redevient éligible
+    // automatiquement (le prochain AiRun revérifie le solde) — aucun replay ici.
+    if (!result.alreadyPaid && organizationId) {
+      await this.emitBalance(organizationId);
+    }
+    return result;
   }
 
   /**
@@ -237,18 +256,133 @@ export class TopUpService {
     if (!owned) {
       throw new NotFoundError('Top-up not found.');
     }
-    const result = await this.creditTopUp(topUpId, context);
-    // Solde temps réel APRÈS commit, uniquement si un crédit a réellement eu lieu
-    // (jamais sur un rejeu idempotent). Best-effort : n'échoue jamais la recharge.
-    if (!result.alreadyPaid) {
+    // creditTopUp émet lui-même wallet.balance.updated sur un crédit réel.
+    return this.creditTopUp(topUpId, context);
+  }
+
+  /**
+   * APPLIQUE une issue de paiement (webhook vérifié OU vérification serveur de
+   * reconciliation) au TopUp figé. Résout le TopUp par `providerPaymentId` puis
+   * par `reference` (metadata = notre id). Idempotent.
+   * - `PAID` : CONTRÔLE montant/devise vs TopUp figé (D4) — match → `creditTopUp`
+   *   existant (JAMAIS de logique comptable dupliquée) ; incohérence → JAMAIS de
+   *   crédit, TopUp `REVIEW_REQUIRED` + `failureCode`, aucun frontend ne peut forcer ;
+   * - `FAILED/CANCELLED/EXPIRED/REFUNDED/PROCESSING` : transition conditionnelle,
+   *   aucun crédit.
+   */
+  async applyPaymentOutcome(outcome: {
+    providerPaymentId: string;
+    status: PaymentStatus;
+    amount: number | null;
+    currency: string | null;
+    reference: string | null;
+  }): Promise<PaymentOutcomeResult> {
+    const topUp = await this.resolveTopUp(outcome.providerPaymentId, outcome.reference);
+    if (!topUp) {
+      return { matched: false, action: 'NOT_FOUND', topUpId: null, reason: null };
+    }
+    const context: AuditActionContext = { userAgent: 'payment-webhook' };
+
+    if (outcome.status === 'PAID') {
+      const check = checkPaymentAmount({
+        topUpAmountMinor: topUp.amountMinor,
+        topUpCurrency: topUp.currency,
+        providerAmount: outcome.amount,
+        providerCurrency: outcome.currency,
+      });
+      if (!check.ok) {
+        // D4 : `completed` mais montant/devise ≠ figé → JAMAIS crédité, revue manuelle.
+        const reason = check.reason === 'CURRENCY_MISMATCH' ? 'PAYMENT_CURRENCY_MISMATCH' : 'PAYMENT_AMOUNT_MISMATCH';
+        await this.transitionTopUp(topUp.id, 'REVIEW_REQUIRED', reason);
+        this.logger.warn(`TopUp ${topUp.id} en revue (${reason}) — aucun crédit.`);
+        return { matched: true, action: 'REVIEW_REQUIRED', topUpId: topUp.id, reason };
+      }
+      const result = await this.creditTopUp(topUp.id, context);
+      return {
+        matched: true,
+        action: result.alreadyPaid ? 'ALREADY_PAID' : 'CREDITED',
+        topUpId: topUp.id,
+        reason: null,
+      };
+    }
+
+    // Statuts non facturables → transition conditionnelle (idempotente).
+    const target = PAYMENT_STATUS_TO_TOPUP[outcome.status];
+    if (target && canTransitionTopUp(topUp.status as TopUpStatus, target)) {
+      await this.transitionTopUp(topUp.id, target, null);
+      return { matched: true, action: 'TRANSITIONED', topUpId: topUp.id, reason: null };
+    }
+    return { matched: true, action: 'NOOP', topUpId: topUp.id, reason: null };
+  }
+
+  // ------------------------------------------------------------------ helpers
+
+  /** Résout le TopUp par identifiant provider puis par notre référence (metadata). */
+  private async resolveTopUp(providerPaymentId: string, reference: string | null) {
+    const or: Array<Record<string, string>> = [];
+    if (providerPaymentId) or.push({ providerPaymentId });
+    if (reference) or.push({ id: reference });
+    if (or.length === 0) return null;
+    return this.prisma.topUp.findFirst({
+      where: { OR: or },
+      select: { id: true, status: true, amountMinor: true, currency: true },
+    });
+  }
+
+  /** Transition conditionnelle de statut TopUp (jamais depuis un état terminal incompatible). */
+  private async transitionTopUp(
+    topUpId: string,
+    to: TopUpStatus,
+    failureCode: string | null,
+  ): Promise<void> {
+    const current = await this.prisma.topUp.findUnique({
+      where: { id: topUpId },
+      select: { status: true },
+    });
+    if (!current || !canTransitionTopUp(current.status as TopUpStatus, to)) {
+      return; // Transition invalide / déjà appliquée : no-op idempotent.
+    }
+    await this.prisma.topUp.updateMany({
+      where: { id: topUpId, status: current.status },
+      data: {
+        status: to,
+        ...(failureCode ? { failureCode } : {}),
+        ...(to === 'FAILED' ? { failedAt: new Date() } : {}),
+        ...(to === 'EXPIRED' ? { expiredAt: new Date() } : {}),
+      },
+    });
+  }
+
+  private async emitBalance(organizationId: string): Promise<void> {
+    try {
       const payload = await this.walletService.getBalanceEvent(organizationId);
       if (payload) {
         this.realtime.emitToOrganization(organizationId, SOCKET_EVENTS.WALLET_BALANCE_UPDATED, payload);
       }
+    } catch (error) {
+      this.logger.warn(
+        `Émission solde post-crédit échouée : ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-    return result;
   }
 }
+
+/** Résultat de l'application d'une issue de paiement (diagnostic, jamais de secret). */
+export interface PaymentOutcomeResult {
+  matched: boolean;
+  action: 'CREDITED' | 'ALREADY_PAID' | 'REVIEW_REQUIRED' | 'TRANSITIONED' | 'NOOP' | 'NOT_FOUND';
+  topUpId: string | null;
+  reason: string | null;
+}
+
+/** Statuts de paiement NON facturables → statut TopUp cible. `PAID` est traité à part (crédit). */
+const PAYMENT_STATUS_TO_TOPUP: Partial<Record<PaymentStatus, TopUpStatus>> = {
+  PROCESSING: 'PROCESSING',
+  FAILED: 'FAILED',
+  CANCELLED: 'CANCELLED',
+  EXPIRED: 'EXPIRED',
+  REFUNDED: 'REFUNDED',
+};
 
 const TOPUP_SELECT = {
   id: true,

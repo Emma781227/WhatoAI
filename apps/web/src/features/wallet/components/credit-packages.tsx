@@ -9,9 +9,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatMinorAmount } from '@/features/products/money';
+import { useOrganization } from '@/features/organizations/organization-provider';
 import { getErrorMessage } from '@/lib/api/api-error';
 
 import type { CreditPackage } from '../api';
+import { setPendingTopUp } from '../pending-payment';
 import { useCreateTopUp, useCreditPackages, useMockConfirmTopUp } from '../use-wallet';
 
 /**
@@ -21,6 +23,8 @@ import { useCreateTopUp, useCreditPackages, useMockConfirmTopUp } from '../use-w
  * derrière PaymentProvider). Les montants et crédits sont autoritaires en base.
  */
 export function CreditPackages() {
+  const { activeOrganization } = useOrganization();
+  const organizationId = activeOrganization.organization.id;
   const packagesQuery = useCreditPackages();
   const createTopUp = useCreateTopUp();
   const mockConfirm = useMockConfirmTopUp();
@@ -32,9 +36,13 @@ export function CreditPackages() {
       onSuccess: (result) => {
         // Le canal de paiement fait autorité (toujours présent dans la session).
         if (result.paymentSession.provider !== 'MOCK') {
-          // Fournisseur réel (hors scope actuel) : redirection vers l'agrégateur.
+          // Fournisseur RÉEL (Genius Pay) : on mémorise la recharge en cours puis
+          // on redirige vers le checkout Mobile Money. Au retour, la page de suivi
+          // SONDE le statut — le frontend ne confirme jamais le paiement.
           if (result.paymentSession.checkoutUrl) {
+            setPendingTopUp(organizationId, result.topUp.id);
             window.location.href = result.paymentSession.checkoutUrl;
+            return; // Page déchargée : ne pas réinitialiser l'état.
           }
           setBusyId(null);
           return;

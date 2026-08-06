@@ -8,7 +8,14 @@
 
 export type PaymentProviderName = 'MOCK' | 'GENIUS_PAY';
 
-export type PaymentStatus = 'PENDING' | 'PROCESSING' | 'PAID' | 'FAILED' | 'CANCELLED' | 'EXPIRED';
+export type PaymentStatus =
+  | 'PENDING'
+  | 'PROCESSING'
+  | 'PAID'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'EXPIRED'
+  | 'REFUNDED';
 
 /** Demande de paiement. `reference` = id du TopUp Whauto (opaque pour le provider). */
 export interface PaymentRequest {
@@ -32,18 +39,33 @@ export interface PaymentSession {
   reference: string;
 }
 
-/** Résultat d'une vérification de statut auprès du provider. */
+/**
+ * Résultat d'une vérification de statut auprès du provider. `amount`/`currency`
+ * (tels que renvoyés par l'agrégateur, en unité MAJEURE) permettent à la couche
+ * TopUp de recouper le montant figé — le provider ne fait aucun calcul de crédits.
+ */
 export interface PaymentStatusResult {
   providerPaymentId: string;
   status: PaymentStatus;
   reference: string | null;
+  amount: number | null;
+  currency: string | null;
 }
 
-/** Événement de webhook paiement normalisé (jamais de signature/secret conservé). */
+/**
+ * Événement de webhook paiement normalisé APRÈS vérification de signature (jamais
+ * de signature/secret conservé). `externalEventId` = identifiant unique de la
+ * livraison webhook (dédup durable inbox) ; `amount`/`currency` = valeurs
+ * annoncées par l'agrégateur (unité MAJEURE), recoupées côté TopUp.
+ */
 export interface PaymentWebhookEvent {
+  externalEventId: string;
+  eventType: string;
   providerPaymentId: string;
   status: PaymentStatus;
   reference: string | null;
+  amount: number | null;
+  currency: string | null;
 }
 
 /**

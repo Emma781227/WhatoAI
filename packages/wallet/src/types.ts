@@ -41,7 +41,16 @@ export const WALLET_TRANSACTION_DIRECTIONS = ['CREDIT', 'DEBIT', 'RESERVE', 'REL
 export type WalletTransactionDirection = (typeof WALLET_TRANSACTION_DIRECTIONS)[number];
 
 /** Statuts d'une recharge (TopUp). PAID/FAILED/CANCELLED/EXPIRED sont terminaux. */
-export const TOPUP_STATUSES = ['PENDING', 'PROCESSING', 'PAID', 'FAILED', 'CANCELLED', 'EXPIRED'] as const;
+export const TOPUP_STATUSES = [
+  'PENDING',
+  'PROCESSING',
+  'PAID',
+  'FAILED',
+  'CANCELLED',
+  'EXPIRED',
+  'REFUNDED',
+  'REVIEW_REQUIRED',
+] as const;
 export type TopUpStatus = (typeof TOPUP_STATUSES)[number];
 
 /** Providers de paiement (miroir de `PaymentProviderName` de @whauto/payments). */

@@ -2135,6 +2135,45 @@ enum TopUpStatus {
   FAILED
   CANCELLED
   EXPIRED
+  // Remboursement Genius Pay (statut provider `refunded`) — terminal.
+  REFUNDED
+  // Webhook `completed` MAIS montant/devise ≠ TopUp figé (D4) : JAMAIS crédité
+  // automatiquement, mis en revue manuelle. Aucun frontend ne peut forcer le crédit.
+  REVIEW_REQUIRED
+}
+
+// Durable inbox des webhooks de PAIEMENT (distincte de WhatsAppInboundEvent).
+// Persistée AVANT tout traitement, dédupliquée par (provider, externalEventId) :
+// trois livraisons du même webhook = une seule ligne (P2002). NON tenant-scopée à
+// la réception (l'organisation n'est connue qu'après résolution du TopUp).
+// `normalizedPayload` = événement normalisé filtré — JAMAIS de signature/secret.
+enum PaymentWebhookEventStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  // Événement signé mais non actionnable pour un TopUp (webhook.test, cashout.*).
+  IGNORED
+}
+
+model PaymentWebhookEvent {
+  id                String                    @id @default(cuid())
+  provider          TopUpProvider
+  externalEventId   String
+  providerPaymentId String?
+  eventType         String
+  normalizedPayload Json
+  status            PaymentWebhookEventStatus @default(RECEIVED)
+  attemptCount      Int                       @default(0)
+  lastErrorCode     String?
+  receivedAt        DateTime                  @default(now())
+  processedAt       DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  @@unique([provider, externalEventId])
+  @@index([status, receivedAt])
+  @@map("payment_webhook_events")
 }
 
 // Miroir de `PaymentProviderName` (@whauto/payments). MOCK en dev/test.
