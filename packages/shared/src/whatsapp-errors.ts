@@ -43,6 +43,22 @@ export class WhatsAppProviderNotImplementedError extends DomainError {
   }
 }
 
+/**
+ * 422 : multi-tenant Meta activé mais aucune connexion WhatsApp active (numéro +
+ * credential ACTIVE) n'est résolvable pour ce Shop. On ÉCHOUE plutôt que
+ * d'envoyer depuis le mauvais numéro (jamais de repli silencieux sur le pilote).
+ */
+export class WhatsAppConnectionNotResolvedError extends DomainError {
+  constructor(shopId: string) {
+    super(
+      `No active WhatsApp connection resolved for shop ${shopId}.`,
+      'WHATSAPP_CONNECTION_NOT_RESOLVED',
+      422,
+    );
+    this.name = 'WhatsAppConnectionNotResolvedError';
+  }
+}
+
 export class InvalidInboundEventError extends DomainError {
   constructor(reason: string) {
     super(`Invalid inbound event: ${reason}`, 'INVALID_INBOUND_EVENT', 400);

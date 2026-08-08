@@ -55,6 +55,21 @@ export const workerEnvSchema = baseEnvSchema.extend({
   // masse par le sweep de récupération) en libérant les crédits. Filet de
   // sécurité de l'invariant « aucune réservation active pour un run terminé ».
   AI_RESERVATION_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
+
+  // Multi-tenant Meta : durée de cache des providers résolus par credential
+  // (déchiffrement + build évités à chaque envoi). Un TTL court borne la
+  // propagation d'une rotation/révocation de token.
+  META_PROVIDER_CACHE_TTL_MS: z.coerce.number().int().positive().default(300000),
+}).superRefine((env, ctx) => {
+  // Fail-fast multi-tenant Meta : le worker déchiffre les tokens pour envoyer —
+  // sans clé de chiffrement, c'est impossible.
+  if (env.META_MULTI_TENANT_ENABLED && !env.SECRETS_ENCRYPTION_KEY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SECRETS_ENCRYPTION_KEY'],
+      message: 'SECRETS_ENCRYPTION_KEY est requis quand META_MULTI_TENANT_ENABLED=true.',
+    });
+  }
 });
 
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;

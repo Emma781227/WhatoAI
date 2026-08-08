@@ -119,39 +119,91 @@ export class MetaCloudWhatsAppProvider implements WhatsAppProvider {
         continue;
       }
       for (const change of changes) {
-        const value = (change as { value?: unknown })?.value as
-          | {
-              messages?: MetaMessage[];
-              statuses?: MetaStatus[];
-              contacts?: MetaContact[];
-            }
-          | undefined;
-        if (!value) {
-          continue;
-        }
-
-        const contactsByWaId = new Map<string, string>();
-        for (const contact of value.contacts ?? []) {
-          if (contact.wa_id && contact.profile?.name) {
-            contactsByWaId.set(contact.wa_id, contact.profile.name);
-          }
-        }
-
-        for (const message of value.messages ?? []) {
-          const parsed = this.parseMessage(message, contactsByWaId);
-          if (parsed) {
-            normalized.push(parsed);
-          }
-        }
-        for (const status of value.statuses ?? []) {
-          const parsed = this.parseStatus(status);
-          if (parsed) {
-            normalized.push(parsed);
-          }
-        }
+        normalized.push(...this.parseChangeValue((change as { value?: unknown })?.value));
       }
     }
     return normalized;
+  }
+
+  /**
+   * Comme {@link parseInboundEvent}, mais GROUPE les événements par
+   * `phone_number_id` — indispensable au routage MULTI-TENANT : un même webhook
+   * Meta peut porter des `change` pour des numéros (donc des commerçants)
+   * différents ; chaque groupe doit être ingéré dans SON canal, jamais fusionné.
+   * Un `change` sans phone_number_id ou sans événement actionnable est ignoré.
+   */
+  parseInboundEventsByPhoneNumber(
+    event: RawInboundEvent,
+  ): Array<{ phoneNumberId: string; events: NormalizedInboundEvent[] }> {
+    const body = event.body as { entry?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || !Array.isArray(body.entry)) {
+      return [];
+    }
+
+    // Regroupe par phone_number_id en préservant l'ordre d'apparition.
+    const groups = new Map<string, NormalizedInboundEvent[]>();
+    for (const entry of body.entry) {
+      const changes = (entry as { changes?: unknown })?.changes;
+      if (!Array.isArray(changes)) {
+        continue;
+      }
+      for (const change of changes) {
+        const value = (change as { value?: unknown })?.value;
+        const phoneNumberId = (value as { metadata?: { phone_number_id?: unknown } } | undefined)
+          ?.metadata?.phone_number_id;
+        if (typeof phoneNumberId !== 'string' || phoneNumberId.length === 0) {
+          continue;
+        }
+        const events = this.parseChangeValue(value);
+        if (events.length === 0) {
+          continue;
+        }
+        const bucket = groups.get(phoneNumberId);
+        if (bucket) {
+          bucket.push(...events);
+        } else {
+          groups.set(phoneNumberId, events);
+        }
+      }
+    }
+
+    return Array.from(groups, ([phoneNumberId, events]) => ({ phoneNumberId, events }));
+  }
+
+  /** Événements normalisés d'un unique `change.value` (messages + statuts). */
+  private parseChangeValue(rawValue: unknown): NormalizedInboundEvent[] {
+    const value = rawValue as
+      | {
+          messages?: MetaMessage[];
+          statuses?: MetaStatus[];
+          contacts?: MetaContact[];
+        }
+      | undefined;
+    if (!value) {
+      return [];
+    }
+
+    const contactsByWaId = new Map<string, string>();
+    for (const contact of value.contacts ?? []) {
+      if (contact.wa_id && contact.profile?.name) {
+        contactsByWaId.set(contact.wa_id, contact.profile.name);
+      }
+    }
+
+    const events: NormalizedInboundEvent[] = [];
+    for (const message of value.messages ?? []) {
+      const parsed = this.parseMessage(message, contactsByWaId);
+      if (parsed) {
+        events.push(parsed);
+      }
+    }
+    for (const status of value.statuses ?? []) {
+      const parsed = this.parseStatus(status);
+      if (parsed) {
+        events.push(parsed);
+      }
+    }
+    return events;
   }
 
   private parseMessage(

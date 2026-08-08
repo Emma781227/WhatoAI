@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { booleanEnv } from './helpers';
+
 /**
  * Variables Meta WhatsApp Cloud API — partagées API et worker (une seule
  * configuration Meta pilote issue de l'environnement dans cette phase).
@@ -23,4 +25,8 @@ export const metaEnvFields = {
   META_GRAPH_API_VERSION: z.string().default('v21.0'),
   META_GRAPH_API_BASE_URL: z.string().url().default('https://graph.facebook.com'),
   META_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  // Multi-tenant Meta : chaque Organization a ses propres credentials chiffrés
+  // (à la place du pilote mono-config env). Quand activé, le chiffrement des
+  // secrets DOIT être configuré (fail-fast — voir superRefine api/worker-env).
+  META_MULTI_TENANT_ENABLED: booleanEnv(false),
 } as const;

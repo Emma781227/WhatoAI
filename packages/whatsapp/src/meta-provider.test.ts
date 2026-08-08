@@ -205,6 +205,91 @@ describe('MetaCloudWhatsAppProvider.extractPhoneNumberIds', () => {
   });
 });
 
+describe('MetaCloudWhatsAppProvider.parseInboundEventsByPhoneNumber — routage multi-tenant', () => {
+  // Un webhook portant DEUX numéros (deux commerçants) dans un seul POST.
+  function twoTenantWebhook() {
+    return {
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: 'WABA_1',
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: { display_phone_number: '15550001', phone_number_id: 'PN_1' },
+                contacts: [{ wa_id: '237650000000', profile: { name: 'Awa' } }],
+                messages: [
+                  { from: '237650000000', id: 'wamid.A', timestamp: '1750000000', type: 'text', text: { body: 'Chez A' } },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          id: 'WABA_2',
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: { display_phone_number: '15550002', phone_number_id: 'PN_2' },
+                messages: [
+                  { from: '237651111111', id: 'wamid.B', timestamp: '1750000001', type: 'text', text: { body: 'Chez B' } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it('groupe les événements par phone_number_id — jamais de fusion inter-tenant', () => {
+    const groups = provider().parseInboundEventsByPhoneNumber({ body: twoTenantWebhook() });
+    expect(groups).toHaveLength(2);
+
+    const byPhone = new Map(groups.map((g) => [g.phoneNumberId, g.events]));
+    expect(byPhone.get('PN_1')).toHaveLength(1);
+    expect(byPhone.get('PN_1')?.[0]).toMatchObject({ externalMessageId: 'wamid.A', text: 'Chez A' });
+    expect(byPhone.get('PN_2')).toHaveLength(1);
+    expect(byPhone.get('PN_2')?.[0]).toMatchObject({ externalMessageId: 'wamid.B', text: 'Chez B' });
+  });
+
+  it('un seul numéro → un seul groupe (parité avec parseInboundEvent)', () => {
+    const groups = provider().parseInboundEventsByPhoneNumber({ body: messageWebhook() });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].phoneNumberId).toBe('PN_1');
+    expect(groups[0].events).toHaveLength(1);
+  });
+
+  it('change sans phone_number_id ou sans événement actionnable → ignoré', () => {
+    // Statut 'sent' (non actionnable) avec phone_number_id présent → aucun groupe.
+    const sentOnly = {
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                metadata: { phone_number_id: 'PN_1' },
+                statuses: [{ id: 'wamid.OUT', status: 'sent', timestamp: '1750000000' }],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    expect(provider().parseInboundEventsByPhoneNumber({ body: sentOnly })).toEqual([]);
+    expect(
+      provider().parseInboundEventsByPhoneNumber({
+        body: { entry: [{ changes: [{ value: { messages: [{ from: 'x', id: 'i', timestamp: '1', type: 'text', text: { body: 'no meta' } }] } }] }] },
+      }),
+    ).toEqual([]);
+    expect(provider().parseInboundEventsByPhoneNumber({ body: null })).toEqual([]);
+  });
+});
+
 describe('MetaCloudWhatsAppProvider.mapMetaError — classification', () => {
   it('classe token/permissions en CONFIGURATION_ERROR', () => {
     expect(provider().mapMetaError(401, { error: { code: 190 } }).errorClass).toBe(

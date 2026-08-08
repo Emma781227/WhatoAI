@@ -2,6 +2,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { Job, Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 
+import type { SecretsEncryptionService } from '../crypto/secrets-encryption.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { MessageStatusService } from './message-status.service';
 import { OutboundProcessor } from './outbound.processor';
@@ -27,7 +28,7 @@ function messageRow(overrides: Record<string, unknown> = {}) {
       id: 'conv-1',
       customerServiceWindowExpiresAt: new Date(Date.now() + 3600_000),
     },
-    channel: { id: 'chan-1', provider: 'MOCK', status: 'CONNECTED', phoneNumber: '+237650000000' },
+    channel: { id: 'chan-1', provider: 'MOCK', status: 'CONNECTED', phoneNumber: '+237650000000', organizationId: 'org-1', shopId: 'shop-1' },
     contact: { normalizedPhone: '+237650123456' },
     ...overrides,
   };
@@ -53,7 +54,11 @@ function buildMocks(row: Record<string, unknown> | null = messageRow()) {
   const messageStatus = { emitStatusUpdated: jest.fn().mockResolvedValue(undefined) };
   const processor = new OutboundProcessor(
     prisma as unknown as PrismaService,
-    new WhatsAppProviderFactory(CONFIG),
+    new WhatsAppProviderFactory(
+      CONFIG,
+      {} as unknown as PrismaService,
+      {} as unknown as SecretsEncryptionService,
+    ),
     CONFIG,
     {} as Redis,
     statusQueue as unknown as Queue,

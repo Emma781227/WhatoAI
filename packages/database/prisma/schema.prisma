@@ -510,6 +510,11 @@ model Organization {
   topUps             TopUp[]
   aiUsageEvents      AiUsageEvent[]
 
+  metaBusinessAccounts    MetaBusinessAccount[]
+  metaWhatsAppCredentials MetaWhatsAppCredential[]
+  whatsAppPhoneNumbers    WhatsAppPhoneNumber[]
+  whatsAppConnections     WhatsAppConnection[]
+
   @@map("organizations")
 }
 
@@ -589,6 +594,7 @@ model Shop {
   aiToolCalls          AiToolCall[]
   conversationHandoffs ConversationHandoff[]
   aiUsageEvents        AiUsageEvent[]
+  whatsAppConnections  WhatsAppConnection[]
 
   // Index unique partiel supplémentaire en SQL brut dans la migration
   // (inexprimable en Prisma) : une seule Shop principale non archivée par org.
@@ -1022,6 +1028,123 @@ model WhatsAppInboundEvent {
   @@index([status, createdAt])
   @@index([organizationId])
   @@map("whatsapp_inbound_events")
+}
+
+// ============================================================================
+// META MULTI-TENANT — credentials WhatsApp par Organization (chiffrés au repos)
+//
+// Chaque Organization a SES propres identifiants Meta (WABA / numéro / token) à
+// la place du pilote mono-config env. Le TOKEN et le secret webhook vivent
+// UNIQUEMENT chiffrés (@whauto/crypto, enveloppe `v1.<keyId>.<iv>.<tag>.<ct>`),
+// jamais en clair / log / API / frontend. Cohérence cross-tenant garantie EN
+// BASE par FK composites chaînées (pattern catalogue). Ce groupe pose les
+// MODÈLES ; le câblage channel/provider (résolution par Shop) vient au groupe
+// suivant. Index partiel « une connexion active par Shop » en SQL brut.
+// ============================================================================
+
+// Identité Meta d'une organisation : Business Manager + WhatsApp Business Account.
+model MetaBusinessAccount {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  businessId         String // Meta Business (BM) id
+  wabaId             String // WhatsApp Business Account id
+  verifiedName       String?
+  timezone           String?
+  currency           String?
+  messagingLimitTier String?
+  status             String? // état WABA côté Meta
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  credentials  MetaWhatsAppCredential[]
+  phoneNumbers WhatsAppPhoneNumber[]
+
+  // Une WABA unique par organisation.
+  @@unique([organizationId, wabaId])
+  // Cible des FK composites des enfants (cohérence cross-tenant en base).
+  @@unique([id, organizationId])
+  @@index([organizationId])
+  @@map("meta_business_accounts")
+}
+
+// Token d'accès CHIFFRÉ (porteur du secret). Plusieurs peuvent coexister
+// (rotation/refresh) ; le plus récent ACTIVE fait foi. `accessTokenEncrypted`
+// n'est JAMAIS déchiffré hors du SecretsEncryptionService ni sérialisé par l'API.
+model MetaWhatsAppCredential {
+  id                    String    @id @default(cuid())
+  organizationId        String
+  metaBusinessAccountId String
+  accessTokenEncrypted  String
+  tokenType             String    @default("SYSTEM_USER")
+  scopes                String[]  @default([])
+  expiresAt             DateTime?
+  revokedAt             DateTime?
+  status                String    @default("ACTIVE") // ACTIVE / EXPIRED / REVOKED
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  businessAccount MetaBusinessAccount @relation(fields: [metaBusinessAccountId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  connections     WhatsAppConnection[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId])
+  @@index([metaBusinessAccountId, status])
+  @@map("meta_whatsapp_credentials")
+}
+
+// Un numéro WhatsApp sous la WABA (identifiants NON secrets).
+model WhatsAppPhoneNumber {
+  id                    String   @id @default(cuid())
+  organizationId        String
+  metaBusinessAccountId String
+  phoneNumberId         String // Meta phone_number_id
+  displayPhoneNumber    String?
+  verifiedName          String?
+  qualityRating         String? // GREEN / YELLOW / RED
+  status                String? // état du numéro côté Meta
+  createdAt             DateTime @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  businessAccount MetaBusinessAccount @relation(fields: [metaBusinessAccountId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  connections     WhatsAppConnection[]
+
+  // Un phone_number_id est GLOBAL côté Meta (jamais partagé entre deux orgs).
+  @@unique([phoneNumberId])
+  @@unique([id, organizationId])
+  @@index([organizationId])
+  @@map("whatsapp_phone_numbers")
+}
+
+// Connexion opérationnelle : lie une Shop à un numéro + un credential. Peut
+// porter un secret webhook chiffré propre. Une seule active par Shop (index
+// partiel SQL). Le numéro/credential ne sont pas emportés par la suppression de
+// la connexion (Restrict).
+model WhatsAppConnection {
+  id                       String    @id @default(cuid())
+  organizationId           String
+  shopId                   String
+  whatsAppPhoneNumberId    String
+  metaWhatsAppCredentialId String
+  webhookSecretEncrypted   String?
+  status                   String    @default("CONNECTED") // CONNECTING / CONNECTED / SUSPENDED / DISCONNECTED / ERROR
+  connectedAt              DateTime?
+  disconnectedAt           DateTime?
+  lastHealthAt             DateTime?
+  lastErrorCode            String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop         Shop                   @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  phoneNumber  WhatsAppPhoneNumber    @relation(fields: [whatsAppPhoneNumberId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  credential   MetaWhatsAppCredential @relation(fields: [metaWhatsAppCredentialId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([shopId, status])
+  @@map("whatsapp_connections")
 }
 
 // ============================================================================

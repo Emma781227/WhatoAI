@@ -34,6 +34,38 @@ export class SendTestMessageDto {
   confirm!: boolean;
 }
 
+/**
+ * Embedded Signup : le frontend transmet le `code` OAuth renvoyé par Meta + les
+ * identifiants sélectionnés (WABA, numéro, business). Le backend échange le code,
+ * abonne l'App et provisionne la connexion. AUCUN token n'est transmis par le
+ * frontend (le token est obtenu et chiffré côté serveur).
+ */
+export class EmbeddedSignupDto {
+  @ApiProperty({ description: 'Code d’autorisation OAuth renvoyé par l’Embedded Signup Meta.' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  code!: string;
+
+  @ApiProperty({ description: 'WhatsApp Business Account id (WABA).' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  wabaId!: string;
+
+  @ApiProperty({ description: 'Phone Number ID Meta du numéro sélectionné.' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  phoneNumberId!: string;
+
+  @ApiProperty({ description: 'Meta Business (Business Manager) id.' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  businessId!: string;
+}
+
 export class MetaChannelHealthResponseDto {
   @ApiProperty() ok!: boolean;
   @ApiProperty() provider!: string;

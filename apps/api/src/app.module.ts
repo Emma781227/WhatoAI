@@ -26,6 +26,7 @@ import { WhatsAppInboundModule } from './modules/whatsapp-inbound/whatsapp-inbou
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { PaymentWebhooksModule } from './modules/payment-webhooks/payment-webhooks.module';
 import { CryptoModule } from './crypto/crypto.module';
+import { MetaCredentialsModule } from './meta-credentials/meta-credentials.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RealtimeModule } from './realtime/realtime.module';
 
@@ -52,6 +53,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     }),
     PrismaModule,
     CryptoModule,
+    MetaCredentialsModule,
     HealthModule,
     RealtimeModule,
     AuthModule,

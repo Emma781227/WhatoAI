@@ -2,7 +2,7 @@
 // serveur local (port FIXE — Jest CJS n'autorise pas l'import dynamique). Secrets
 // de TEST uniquement. Le VRAI GeniusPayProvider est exercé (create + status),
 // aucun appel vers Genius Pay réel.
-const FAKE_PORT = 59981;
+const FAKE_PORT = 45901;
 process.env.NODE_ENV = 'development';
 process.env.LOG_LEVEL = 'fatal';
 process.env.AUTH_EXPOSE_TEST_TOKENS = 'true';

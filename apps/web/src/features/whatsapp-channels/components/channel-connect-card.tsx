@@ -11,10 +11,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useOrganization } from '@/features/organizations/organization-provider';
 import { getErrorMessage } from '@/lib/api/api-error';
+import { isMetaEmbeddedSignupConfigured } from '@/lib/env';
 import { PERMISSIONS } from '@/lib/permissions/constants';
 import { usePermissions } from '@/lib/permissions/use-permissions';
 
 import { whatsappChannelKeys, whatsappChannelsApi } from '../api';
+import { MetaConnectButton } from './meta-connect-button';
 
 /**
  * État vide de l'inbox quand la Shop n'a pas de canal : connexion d'un canal
@@ -41,6 +43,9 @@ export function ChannelConnectCard({ shopId, shopName }: { shopId: string; shopN
     onError: (error) => toast.error(getErrorMessage(error)),
   });
 
+  const canManage = can(PERMISSIONS.WHATSAPP_CHANNELS_MANAGE);
+  const metaAvailable = isMetaEmbeddedSignupConfigured;
+
   return (
     <div className="flex h-full items-center justify-center p-6">
       <Card className="w-full max-w-md">
@@ -48,13 +53,43 @@ export function ChannelConnectCard({ shopId, shopName }: { shopId: string; shopN
           <MessageCircle aria-hidden className="mx-auto h-10 w-10 text-primary" />
           <CardTitle>Connecter WhatsApp</CardTitle>
           <CardDescription>
-            {can(PERMISSIONS.WHATSAPP_CHANNELS_MANAGE)
-              ? 'Connectez un canal WhatsApp de démonstration (simulation) pour recevoir et envoyer des messages dans cette boutique.'
-              : 'Aucun canal WhatsApp n’est connecté à cette boutique. Contactez un administrateur pour le configurer.'}
+            {!canManage
+              ? 'Aucun canal WhatsApp n’est connecté à cette boutique. Contactez un administrateur pour le configurer.'
+              : metaAvailable
+                ? 'Connectez le numéro WhatsApp Business de votre boutique pour recevoir et envoyer des messages depuis Whauto AI.'
+                : 'Connectez un canal WhatsApp de démonstration (simulation) pour recevoir et envoyer des messages dans cette boutique.'}
           </CardDescription>
         </CardHeader>
-        {can(PERMISSIONS.WHATSAPP_CHANNELS_MANAGE) ? (
-          <CardContent>
+        {canManage ? (
+          <CardContent className="space-y-6">
+            {metaAvailable ? (
+              <div className="space-y-3">
+                <MetaConnectButton shopId={shopId} />
+                <ul className="space-y-1 text-xs text-muted-foreground">
+                  <li>
+                    • <span className="font-medium">J’ai déjà un numéro WhatsApp Business</span> :
+                    connectez-le directement.
+                  </li>
+                  <li>
+                    • <span className="font-medium">Je veux un nouveau numéro</span> : créez-le
+                    pendant la connexion Meta.
+                  </li>
+                </ul>
+                <p className="text-xs text-muted-foreground">
+                  Vous serez redirigé vers Meta pour autoriser Whauto AI. Nous ne voyons jamais
+                  votre mot de passe Meta.
+                </p>
+              </div>
+            ) : null}
+
+            {metaAvailable ? (
+              <div className="flex items-center gap-3">
+                <span className="h-px flex-1 bg-border" />
+                <span className="text-xs text-muted-foreground">ou démonstration</span>
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            ) : null}
+
             <form
               className="space-y-4"
               onSubmit={(event) => {
@@ -84,7 +119,12 @@ export function ChannelConnectCard({ shopId, shopName }: { shopId: string; shopN
                   maxLength={20}
                 />
               </div>
-              <Button type="submit" className="w-full" disabled={connectMutation.isPending}>
+              <Button
+                type="submit"
+                variant={metaAvailable ? 'outline' : 'default'}
+                className="w-full"
+                disabled={connectMutation.isPending}
+              >
                 Connecter le canal (simulation)
               </Button>
             </form>

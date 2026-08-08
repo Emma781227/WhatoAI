@@ -20,6 +20,7 @@ import { WhatsAppChannelResponseDto } from './dto/channel-responses.dto';
 import { CreateMockChannelDto } from './dto/create-mock-channel.dto';
 import {
   ConnectMetaChannelDto,
+  EmbeddedSignupDto,
   MetaChannelHealthResponseDto,
   SendTestMessageDto,
   SendTestMessageResponseDto,
@@ -72,6 +73,25 @@ export class WhatsAppChannelsController {
   ): Promise<WhatsAppChannelResponseDto> {
     return WhatsAppChannelResponseDto.fromChannel(
       await this.channelsService.connectMeta(tenant, shopId, dto, actionContext(req)),
+    );
+  }
+
+  @Post('meta/embedded-signup')
+  @UseGuards(EmailVerifiedGuard)
+  @RequirePermissions(PERMISSIONS.WHATSAPP_CHANNELS_MANAGE)
+  @ApiOperation({
+    summary:
+      'Connecter le WhatsApp du commerçant via Embedded Signup (échange OAuth + provisioning) — multi-tenant',
+  })
+  @ApiCreatedResponse({ type: WhatsAppChannelResponseDto })
+  async embeddedSignup(
+    @CurrentTenant() tenant: TenantContext,
+    @Param('shopId') shopId: string,
+    @Body() dto: EmbeddedSignupDto,
+    @Req() req: Request,
+  ): Promise<WhatsAppChannelResponseDto> {
+    return WhatsAppChannelResponseDto.fromChannel(
+      await this.channelsService.onboard(tenant, shopId, dto, actionContext(req)),
     );
   }
 

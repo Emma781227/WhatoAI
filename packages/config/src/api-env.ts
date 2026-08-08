@@ -98,6 +98,15 @@ export const apiEnvSchema = baseEnvSchema.extend({
       message: 'ALLOW_MOCK_PAYMENTS ne doit jamais être actif en production.',
     });
   }
+  // Fail-fast multi-tenant Meta : sans clé de chiffrement, impossible de stocker
+  // les tokens Meta au repos. On exige la clé DÈS que le multi-tenant est activé.
+  if (env.META_MULTI_TENANT_ENABLED && !env.SECRETS_ENCRYPTION_KEY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SECRETS_ENCRYPTION_KEY'],
+      message: 'SECRETS_ENCRYPTION_KEY est requis quand META_MULTI_TENANT_ENABLED=true.',
+    });
+  }
   // Fail-fast Genius Pay (D6) : n'exige QUE les variables réellement nécessaires
   // selon la doc officielle — auth marchand (clé publique/secrète) + secret
   // webhook dédié. La valeur n'est JAMAIS affichée (seul le nom apparaît).

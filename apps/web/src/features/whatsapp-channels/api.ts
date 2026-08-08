@@ -33,6 +33,18 @@ export interface ConnectMockChannelInput {
   phoneNumber: string;
 }
 
+/**
+ * Données capturées par l'Embedded Signup Meta côté navigateur puis renvoyées
+ * telles quelles au backend, qui échange le `code` contre un token (côté serveur
+ * UNIQUEMENT — jamais de secret d'App côté frontend).
+ */
+export interface EmbeddedSignupInput {
+  code: string;
+  wabaId: string;
+  phoneNumberId: string;
+  businessId: string;
+}
+
 function channelBase(organizationId: string, shopId: string): string {
   return `/organizations/${organizationId}/shops/${shopId}/whatsapp-channel`;
 }
@@ -52,6 +64,13 @@ export const whatsappChannelsApi = {
     return apiRequest<WhatsAppChannel>(`${channelBase(organizationId, shopId)}/disconnect`, {
       method: 'POST',
     });
+  },
+  /** Onboarding Meta Cloud : le backend échange le `code` et provisionne le canal. */
+  embeddedSignup(organizationId: string, shopId: string, input: EmbeddedSignupInput) {
+    return apiRequest<WhatsAppChannel>(
+      `${channelBase(organizationId, shopId)}/meta/embedded-signup`,
+      { method: 'POST', body: input },
+    );
   },
 };
 

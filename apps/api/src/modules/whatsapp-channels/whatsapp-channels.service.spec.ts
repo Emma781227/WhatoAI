@@ -64,6 +64,7 @@ function buildMocks() {
     auditService as unknown as OrganizationAuditService,
     providerFactory as unknown as WhatsAppProviderFactory,
     configService as unknown as ConfigService,
+    { isConfigured: () => true, encrypt: (s: string) => `v1.enc.${s}`, decrypt: (s: string) => s } as unknown as import('../../crypto/secrets-encryption.service').SecretsEncryptionService,
   );
   return { service, prisma, auditService };
 }

@@ -9,7 +9,7 @@ vi.mock('@/features/organizations/organization-provider', () => ({
   useOrganization: () => ({ activeOrganization: { organization: { id: 'org1' } } }),
 }));
 
-const mockGetPending = vi.fn<[], string | null>();
+const mockGetPending = vi.fn<() => string | null>();
 const mockClear = vi.fn();
 vi.mock('@/features/wallet/pending-payment', () => ({
   getPendingTopUp: () => mockGetPending(),

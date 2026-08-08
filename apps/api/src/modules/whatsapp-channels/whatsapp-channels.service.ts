@@ -12,9 +12,14 @@ import {
   WhatsAppChannelAlreadyActiveError,
   WhatsAppChannelNotFoundError,
 } from '@whauto/shared';
-import { normalizePhoneNumber, WhatsAppProviderSendError } from '@whauto/whatsapp';
+import {
+  MetaOnboardingClient,
+  normalizePhoneNumber,
+  WhatsAppProviderSendError,
+} from '@whauto/whatsapp';
 
 import type { TenantContext } from '../../common/tenant/tenant-context.interface';
+import { SecretsEncryptionService } from '../../crypto/secrets-encryption.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { AuditActionContext } from '../organizations/organization-audit.service';
 import { OrganizationAuditService } from '../organizations/organization-audit.service';
@@ -50,12 +55,30 @@ function isActiveChannelConflict(error: unknown): boolean {
 
 @Injectable()
 export class WhatsAppChannelsService {
+  private onboardingClient?: MetaOnboardingClient;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: OrganizationAuditService,
     private readonly providerFactory: WhatsAppProviderFactory,
     private readonly configService: ConfigService,
+    private readonly secrets: SecretsEncryptionService,
   ) {}
+
+  /** Client d'onboarding Meta (Embedded Signup) — config App injectée depuis l'env. */
+  private getOnboardingClient(): MetaOnboardingClient {
+    if (!this.onboardingClient) {
+      this.onboardingClient = new MetaOnboardingClient({
+        appId: this.configService.get<string>('META_APP_ID'),
+        appSecret: this.configService.get<string>('META_APP_SECRET'),
+        graphApiVersion: this.configService.get<string>('META_GRAPH_API_VERSION') ?? 'v21.0',
+        graphBaseUrl:
+          this.configService.get<string>('META_GRAPH_API_BASE_URL') ?? 'https://graph.facebook.com',
+        requestTimeoutMs: this.configService.get<number>('META_REQUEST_TIMEOUT_MS'),
+      });
+    }
+    return this.onboardingClient;
+  }
 
   /**
    * Connecte un canal MOCK à une Shop : création + passage direct à CONNECTED
@@ -300,6 +323,157 @@ export class WhatsAppChannelsService {
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new WhatsAppChannelAlreadyActiveError();
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Embedded Signup (P1-G4) : provisionne une connexion WhatsApp par-tenant à
+   * partir du `code` renvoyé par Meta. Séquence : échange OAuth → abonnement de
+   * l'App à la WABA → lecture du numéro (appels Graph EXTERNES) puis, dans UNE
+   * transaction : stockage du token CHIFFRÉ (jamais en clair/log/réponse),
+   * business/numéro, connexion active (remplace l'ancienne) et WhatsAppChannel
+   * opérationnel CONNECTED. Le retour ne contient JAMAIS de secret.
+   */
+  async onboard(
+    tenant: TenantContext,
+    shopId: string,
+    input: { code: string; wabaId: string; phoneNumberId: string; businessId: string },
+    context: AuditActionContext,
+  ): Promise<WhatsAppChannelPublic> {
+    if (this.configService.get('META_MULTI_TENANT_ENABLED') !== true || !this.secrets.isConfigured()) {
+      throw new MetaChannelConfigurationError();
+    }
+    const shop = await this.getShopForTenant(tenant, shopId);
+    if (shop.status === 'ARCHIVED') {
+      throw new ShopArchivedError();
+    }
+
+    // Appels Graph EXTERNES (hors transaction) — via le VRAI client d'onboarding.
+    const client = this.getOnboardingClient();
+    let accessTokenEncrypted: string;
+    let expiresAt: Date | null;
+    let phone: { displayPhoneNumber: string | null; verifiedName: string | null; qualityRating: string | null };
+    try {
+      const token = await client.exchangeCodeForToken(input.code);
+      await client.subscribeApp(input.wabaId, token.accessToken);
+      phone = await client.getPhoneNumber(input.phoneNumberId, token.accessToken);
+      // Chiffrement immédiat : le clair ne quitte jamais cette portée.
+      accessTokenEncrypted = this.secrets.encrypt(token.accessToken);
+      expiresAt = token.expiresInSeconds ? new Date(Date.now() + token.expiresInSeconds * 1000) : null;
+    } catch (error) {
+      throw new MetaApiError(error instanceof Error ? error.message : 'Meta onboarding failed.');
+    }
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const now = new Date();
+        const businessAccount = await tx.metaBusinessAccount.upsert({
+          where: { organizationId_wabaId: { organizationId: tenant.organizationId, wabaId: input.wabaId } },
+          update: { businessId: input.businessId, verifiedName: phone.verifiedName ?? undefined },
+          create: {
+            organizationId: tenant.organizationId,
+            businessId: input.businessId,
+            wabaId: input.wabaId,
+            verifiedName: phone.verifiedName ?? null,
+          },
+          select: { id: true },
+        });
+
+        const credential = await tx.metaWhatsAppCredential.create({
+          data: {
+            organizationId: tenant.organizationId,
+            metaBusinessAccountId: businessAccount.id,
+            accessTokenEncrypted,
+            tokenType: 'SYSTEM_USER',
+            scopes: ['whatsapp_business_messaging', 'whatsapp_business_management'],
+            expiresAt,
+            status: 'ACTIVE',
+          },
+          select: { id: true },
+        });
+
+        const phoneNumber = await tx.whatsAppPhoneNumber.upsert({
+          where: { phoneNumberId: input.phoneNumberId },
+          update: {
+            displayPhoneNumber: phone.displayPhoneNumber ?? undefined,
+            verifiedName: phone.verifiedName ?? undefined,
+            qualityRating: phone.qualityRating ?? undefined,
+          },
+          create: {
+            organizationId: tenant.organizationId,
+            metaBusinessAccountId: businessAccount.id,
+            phoneNumberId: input.phoneNumberId,
+            displayPhoneNumber: phone.displayPhoneNumber ?? null,
+            verifiedName: phone.verifiedName ?? null,
+            qualityRating: phone.qualityRating ?? null,
+          },
+          select: { id: true },
+        });
+
+        // Connexion : clôt l'active précédente (index partiel une active/Shop) puis crée.
+        await tx.whatsAppConnection.updateMany({
+          where: { organizationId: tenant.organizationId, shopId, status: { in: [...ACTIVE_CHANNEL_STATUSES] } },
+          data: { status: 'DISCONNECTED', disconnectedAt: now },
+        });
+        const connection = await tx.whatsAppConnection.create({
+          data: {
+            organizationId: tenant.organizationId,
+            shopId,
+            whatsAppPhoneNumberId: phoneNumber.id,
+            metaWhatsAppCredentialId: credential.id,
+            status: 'CONNECTED',
+            connectedAt: now,
+          },
+          select: { id: true },
+        });
+
+        // Canal opérationnel : clôt l'actif précédent puis crée META_CLOUD CONNECTED.
+        await tx.whatsAppChannel.updateMany({
+          where: { organizationId: tenant.organizationId, shopId, status: { in: [...ACTIVE_CHANNEL_STATUSES] } },
+          data: { status: 'DISCONNECTED', disconnectedAt: now },
+        });
+        const channel = await tx.whatsAppChannel.create({
+          data: {
+            organizationId: tenant.organizationId,
+            shopId,
+            provider: 'META_CLOUD',
+            status: 'CONNECTED',
+            displayName: (phone.verifiedName ?? 'WhatsApp Business').trim(),
+            phoneNumber: phone.displayPhoneNumber ?? input.phoneNumberId,
+            phoneNumberId: input.phoneNumberId,
+            wabaId: input.wabaId,
+            businessId: input.businessId,
+            displayPhoneNumber: phone.displayPhoneNumber ?? null,
+            verifiedName: phone.verifiedName ?? null,
+            connectedAt: now,
+          },
+          select: WHATSAPP_CHANNEL_PUBLIC_SELECT,
+        });
+
+        await this.auditService.record(
+          {
+            organizationId: tenant.organizationId,
+            eventType: 'META_CHANNEL_CONNECTED',
+            actorUserId: tenant.userId,
+            // Jamais de secret : seulement des identifiants non sensibles.
+            metadata: {
+              channelId: channel.id,
+              connectionId: connection.id,
+              shopId,
+              phoneNumberId: input.phoneNumberId,
+              wabaId: input.wabaId,
+            },
+            context,
+          },
+          tx,
+        );
+        return channel;
+      });
+    } catch (error) {
+      if (isActiveChannelConflict(error)) {
         throw new WhatsAppChannelAlreadyActiveError();
       }
       throw error;

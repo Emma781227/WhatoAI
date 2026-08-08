@@ -13,9 +13,22 @@ const envSchema = z.object({
       message: 'NEXT_PUBLIC_API_URL doit se terminer par /api (ex. http://localhost:4000/api)',
     })
     .transform((value) => value.replace(/\/$/, '')),
+  // App Meta (public, non secret) pour l'Embedded Signup côté navigateur. Vides
+  // tant que l'App Meta n'est pas configurée → le bouton « Connecter mon
+  // WhatsApp Business » reste masqué (aucun faux flux). Le SECRET d'App ne vit
+  // JAMAIS côté frontend (échange OAuth uniquement côté serveur).
+  NEXT_PUBLIC_META_APP_ID: z.string().optional(),
+  NEXT_PUBLIC_META_CONFIG_ID: z.string().optional(),
 });
 
 export const env = envSchema.parse({
   // Accès statique obligatoire : Next.js inline les NEXT_PUBLIC_* au build.
   NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+  NEXT_PUBLIC_META_APP_ID: process.env.NEXT_PUBLIC_META_APP_ID,
+  NEXT_PUBLIC_META_CONFIG_ID: process.env.NEXT_PUBLIC_META_CONFIG_ID,
 });
+
+/** L'Embedded Signup Meta est-il configurable côté navigateur ? (App ID + config). */
+export const isMetaEmbeddedSignupConfigured = Boolean(
+  env.NEXT_PUBLIC_META_APP_ID && env.NEXT_PUBLIC_META_CONFIG_ID,
+);

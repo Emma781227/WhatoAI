@@ -3,7 +3,6 @@ import { timingSafeEqual } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MetaWebhookSignatureError, MetaWebhookVerificationError } from '@whauto/shared';
-import type { NormalizedInboundEvent } from '@whauto/whatsapp';
 
 import { PrismaService } from '../../prisma/prisma.service';
 import { InboundIngestionService } from '../whatsapp-inbound/inbound-ingestion.service';
@@ -64,7 +63,9 @@ export class MetaWebhookService {
 
     const provider = this.providerFactory.getMetaProvider();
 
-    // AUTORITÉ CRYPTOGRAPHIQUE : HMAC-SHA256 du corps brut.
+    // AUTORITÉ CRYPTOGRAPHIQUE : HMAC-SHA256 du corps brut. Le secret d'App
+    // (META_APP_SECRET) est commun à TOUS les tenants — un seul webhook signé
+    // porte les événements de plusieurs commerçants.
     const valid = provider.validateInboundEvent({
       body: input.parsedBody,
       rawBody: input.rawBody,
@@ -74,39 +75,54 @@ export class MetaWebhookService {
       throw new MetaWebhookSignatureError();
     }
 
-    const events: NormalizedInboundEvent[] = provider.parseInboundEvent({ body: input.parsedBody });
-    if (events.length === 0) {
+    // MULTI-TENANT : grouper par phone_number_id — chaque groupe est routé vers
+    // SON canal (commerçant), jamais fusionné dans un seul.
+    const groups = provider.parseInboundEventsByPhoneNumber({ body: input.parsedBody });
+    if (groups.length === 0) {
       return; // Notification sans événement actionnable (ex. statut 'sent').
     }
 
-    const phoneNumberIds = provider.extractPhoneNumberIds(input.parsedBody);
-    const channel =
-      phoneNumberIds.length > 0
-        ? await this.prisma.whatsAppChannel.findFirst({
-            where: {
-              provider: 'META_CLOUD',
-              phoneNumberId: { in: phoneNumberIds },
-              status: { in: ['CONNECTING', 'CONNECTED', 'SUSPENDED'] },
-            },
-            select: { id: true, organizationId: true },
-          })
-        : null;
-
-    if (!channel) {
-      // Signature valide mais phone_number_id inconnu : ACK, log technique
-      // filtré, AUCUNE écriture métier (validé — ajustement 5).
-      this.logger.warn(
-        `Webhook Meta signé pour un phone_number_id non rattaché à un canal actif — ignoré (ACK).`,
-      );
-      return;
+    // Résolution des canaux actifs en UNE requête, puis routage par numéro.
+    const channels = await this.prisma.whatsAppChannel.findMany({
+      where: {
+        provider: 'META_CLOUD',
+        phoneNumberId: { in: groups.map((g) => g.phoneNumberId) },
+        status: { in: ['CONNECTING', 'CONNECTED', 'SUSPENDED'] },
+      },
+      select: { id: true, organizationId: true, phoneNumberId: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    // Un phone_number_id ne devrait porter qu'un canal actif ; en cas d'ambiguïté
+    // on prend le plus ancien (déterministe) — le premier rencontré est conservé.
+    const channelByPhone = new Map<string, { id: string; organizationId: string }>();
+    for (const channel of channels) {
+      if (channel.phoneNumberId && !channelByPhone.has(channel.phoneNumberId)) {
+        channelByPhone.set(channel.phoneNumberId, {
+          id: channel.id,
+          organizationId: channel.organizationId,
+        });
+      }
     }
 
-    await this.ingestion.persistAndPublish(channel, events);
+    for (const group of groups) {
+      const channel = channelByPhone.get(group.phoneNumberId);
+      if (!channel) {
+        // Signature valide mais phone_number_id inconnu : ACK, log technique
+        // filtré, AUCUNE écriture métier (validé — ajustement 5). Les autres
+        // groupes du même webhook restent traités.
+        this.logger.warn(
+          'Webhook Meta signé pour un phone_number_id non rattaché à un canal actif — groupe ignoré (ACK).',
+        );
+        continue;
+      }
 
-    // Diagnostic UI — best-effort, ne bloque jamais l'ACK.
-    await this.prisma.whatsAppChannel
-      .update({ where: { id: channel.id }, data: { lastWebhookAt: new Date() } })
-      .catch(() => undefined);
+      await this.ingestion.persistAndPublish(channel, group.events);
+
+      // Diagnostic UI — best-effort, ne bloque jamais l'ACK.
+      await this.prisma.whatsAppChannel
+        .update({ where: { id: channel.id }, data: { lastWebhookAt: new Date() } })
+        .catch(() => undefined);
+    }
   }
 
   private safeEqual(a: string, b: string): boolean {

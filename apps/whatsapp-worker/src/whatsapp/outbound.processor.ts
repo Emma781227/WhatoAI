@@ -2,6 +2,7 @@ import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  DomainError,
   isCustomerServiceWindowOpen,
   statusesFailableFrom,
   statusesUpgradableTo,
@@ -74,7 +75,16 @@ export class OutboundProcessor implements OnModuleInit, OnModuleDestroy {
         conversation: {
           select: { id: true, customerServiceWindowExpiresAt: true },
         },
-        channel: { select: { id: true, provider: true, status: true, phoneNumber: true } },
+        channel: {
+          select: {
+            id: true,
+            provider: true,
+            status: true,
+            phoneNumber: true,
+            organizationId: true,
+            shopId: true,
+          },
+        },
         contact: { select: { normalizedPhone: true } },
       },
     });
@@ -111,7 +121,22 @@ export class OutboundProcessor implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const provider = this.providerFactory.getProvider(message.channel.provider);
+    // Résolution du provider PAR CANAL : en multi-tenant Meta, credentials
+    // déchiffrés du Shop. Une résolution impossible (aucune connexion active) est
+    // un échec DÉTERMINISTE — inutile de retenter, jamais d'envoi depuis un autre
+    // numéro.
+    let provider;
+    try {
+      provider = await this.providerFactory.getProviderForChannel({
+        provider: message.channel.provider,
+        organizationId: message.channel.organizationId,
+        shopId: message.channel.shopId,
+      });
+    } catch (error) {
+      const code = error instanceof DomainError ? error.code : 'PROVIDER_RESOLUTION_FAILED';
+      await this.markFailed(message.id, code, 'Unable to resolve WhatsApp provider for channel.');
+      return;
+    }
 
     // Trace de tentative AVANT l'appel externe (diagnostic des réponses perdues).
     await this.prisma.message.updateMany({
