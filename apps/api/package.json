@@ -26,6 +26,7 @@
     "@node-rs/argon2": "^2.0.2",
     "@socket.io/redis-adapter": "^8.3.0",
     "@whauto/config": "workspace:*",
+    "@whauto/crypto": "workspace:*",
     "@whauto/database": "workspace:*",
     "@whauto/payments": "workspace:*",
     "@whauto/shared": "workspace:*",

@@ -68,6 +68,9 @@ importers:
       '@whauto/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@whauto/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@whauto/database':
         specifier: workspace:*
         version: link:../../packages/database
@@ -316,6 +319,9 @@ importers:
       '@whauto/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@whauto/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@whauto/database':
         specifier: workspace:*
         version: link:../../packages/database
@@ -405,6 +411,24 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      '@whauto/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@whauto/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.16)(tsx@4.23.0)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(jsdom@26.1.0)(lightningcss@1.32.0)(terser@5.49.0)
+
+  packages/crypto:
     devDependencies:
       '@whauto/eslint-config':
         specifier: workspace:*

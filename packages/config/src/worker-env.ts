@@ -2,11 +2,13 @@ import { z } from 'zod';
 
 import { aiEnvFields } from './ai-env';
 import { baseEnvSchema } from './base-env';
+import { cryptoEnvFields } from './crypto-env';
 import { metaEnvFields } from './meta-env';
 
 export const workerEnvSchema = baseEnvSchema.extend({
   ...metaEnvFields,
   ...aiEnvFields,
+  ...cryptoEnvFields,
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
 

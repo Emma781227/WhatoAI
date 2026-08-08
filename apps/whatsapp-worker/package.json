@@ -18,6 +18,7 @@
     "@socket.io/redis-emitter": "^5.1.0",
     "@whauto/ai": "workspace:*",
     "@whauto/config": "workspace:*",
+    "@whauto/crypto": "workspace:*",
     "@whauto/database": "workspace:*",
     "@whauto/shared": "workspace:*",
     "@whauto/wallet": "workspace:*",

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { aiEnvFields } from './ai-env';
 import { baseEnvSchema } from './base-env';
+import { cryptoEnvFields } from './crypto-env';
 import { booleanEnv } from './helpers';
 import { metaEnvFields } from './meta-env';
 import { paymentEnvFields } from './payment-env';
@@ -10,6 +11,7 @@ export const apiEnvSchema = baseEnvSchema.extend({
   ...metaEnvFields,
   ...aiEnvFields,
   ...paymentEnvFields,
+  ...cryptoEnvFields,
   API_PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().url().default('http://localhost:3000'),
   DATABASE_URL: z.string().url(),

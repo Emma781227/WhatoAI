@@ -9,6 +9,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { AiModule } from './ai/ai.module';
 import { CartsWorkerModule } from './carts/carts.module';
 import { ConnectivityModule } from './connectivity/connectivity.module';
+import { CryptoModule } from './crypto/crypto.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
@@ -35,6 +36,7 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     }),
     ScheduleModule.forRoot(),
     PrismaModule,
+    CryptoModule,
     ConnectivityModule,
     AiModule,
     WhatsAppModule,
