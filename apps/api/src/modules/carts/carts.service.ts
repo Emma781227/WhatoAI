@@ -1,25 +1,33 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  addItemToCartTx,
+  assertCartMutable,
+  assertCartVersion,
+  claimCartMutation,
+  isDuplicateCartMutation,
+  lockCartRow,
+  recalcAndTouchCart,
+  removeCartItemTx,
+  updateCartItemQuantityTx,
+  type CartMutationDeps,
+} from '@whauto/commerce';
 import { Prisma } from '@whauto/database';
+import type { OrganizationAuditEventType } from '@whauto/database';
 import {
   buildCartSummaryText,
-  CartConcurrencyError,
   CartCurrencyMismatchError,
   CartEmptyError,
-  CartInsufficientStockError,
   CartItemNotFoundError,
   CartNotActiveError,
   CartNotFoundError,
   CartPriceChangedError,
   CartProductUnavailableError,
-  CheckoutAlreadyConfirmedError,
-  computeCartTotals,
   computeLineSubtotal,
   ConversationNotFoundError,
   revalidateCartLine,
   ShopArchivedError,
   SOCKET_EVENTS,
-  ValidationError,
   VariantNotFoundError,
 } from '@whauto/shared';
 import type { CartRealtimeEvent, LineRevalidationResult } from '@whauto/shared';
@@ -81,6 +89,56 @@ export class CartsService {
     };
   }
 
+  /**
+   * Dépendances de mutation (réservations + audit) injectées au cœur partagé
+   * `@whauto/commerce` : les closures capturent org/shop/cartId/config/acteur, de
+   * sorte que le cœur ignore `ReservationConfig` et le service d'audit.
+   */
+  private cartMutationDeps(
+    tenant: TenantContext,
+    shopId: string,
+    cartId: string,
+    context: AuditActionContext,
+  ): CartMutationDeps {
+    const config = this.reservationConfig();
+    return {
+      reserveForItem: async (tx, p) => {
+        await this.reservationService.reserveForItem(tx, {
+          organizationId: tenant.organizationId,
+          shopId,
+          cartId,
+          cartItemId: p.cartItemId,
+          variantId: p.variantId,
+          quantity: p.quantity,
+          trackInventory: p.trackInventory,
+          config,
+          actorUserId: tenant.userId,
+        });
+      },
+      adjustActiveReservation: (tx, reservation, delta) =>
+        this.reservationService.adjustActiveReservation(tx, reservation, delta, tenant.userId),
+      releaseReservation: async (tx, reservation, reason) => {
+        await this.reservationService.releaseReservation(tx, reservation, 'RELEASED', reason);
+      },
+      recordAudit: async (tx, evt) => {
+        await this.auditService.record(
+          {
+            organizationId: tenant.organizationId,
+            eventType: evt.eventType as OrganizationAuditEventType,
+            actorUserId: tenant.userId,
+            metadata: evt.metadata as Prisma.InputJsonValue,
+            context,
+          },
+          tx,
+        );
+      },
+    };
+  }
+
+  private inactivityTtlMinutes(): number {
+    return this.configService.get<number>('CART_INACTIVITY_TTL_MINUTES') ?? 120;
+  }
+
   private inactivityExpiry(): Date {
     const ttl = this.configService.get<number>('CART_INACTIVITY_TTL_MINUTES') ?? 120;
     return new Date(Date.now() + ttl * 60_000);
@@ -140,13 +198,12 @@ export class CartsService {
 
   /** Verrou pessimiste : sérialise TOUTES les mutations d'un même panier. */
   private async lockCart(tx: Prisma.TransactionClient, cartId: string): Promise<void> {
-    await tx.$queryRaw`SELECT "id" FROM "carts" WHERE "id" = ${cartId} FOR UPDATE`;
+    await lockCartRow(tx, cartId);
   }
 
   /**
-   * Idempotence ciblée (validé §21) : l'insertion dans la MÊME transaction
-   * déduplique — un P2002 sur (conversationId, clientMutationId) signifie
-   * "déjà appliqué", l'appelant renvoie l'état courant sans double effet.
+   * Idempotence ciblée (validé §21) : délègue au cœur partagé `@whauto/commerce`
+   * — l'insertion dans la MÊME transaction déduplique (P2002 = déjà appliqué).
    */
   async claimMutation(
     tx: Prisma.TransactionClient,
@@ -154,17 +211,15 @@ export class CartsService {
     conversationId: string,
     clientMutationId: string | undefined,
   ): Promise<void> {
-    if (clientMutationId === undefined) {
-      return;
-    }
-    await tx.cartMutation.create({
-      data: { organizationId: tenant.organizationId, conversationId, clientMutationId },
-      select: { id: true },
+    await claimCartMutation(tx, {
+      organizationId: tenant.organizationId,
+      conversationId,
+      clientMutationId,
     });
   }
 
   isDuplicateMutation(error: unknown): boolean {
-    return isUniqueViolation(error, 'clientMutationId');
+    return isDuplicateCartMutation(error);
   }
 
   private assertMutable(cart: {
@@ -172,44 +227,20 @@ export class CartsService {
     version: number;
     checkout: { status: string } | null;
   }): void {
-    if (cart.checkout?.status === 'CONFIRMED') {
-      throw new CheckoutAlreadyConfirmedError();
-    }
-    if (!OPEN_STATUSES.includes(cart.status as (typeof OPEN_STATUSES)[number])) {
-      throw new CartNotActiveError(cart.status);
-    }
+    assertCartMutable(cart);
   }
 
   private assertVersion(cart: { version: number }, expectedVersion: number | undefined): void {
-    if (expectedVersion !== undefined && expectedVersion !== cart.version) {
-      throw new CartConcurrencyError();
-    }
+    assertCartVersion(cart, expectedVersion);
   }
 
   /** Recalcule totaux + compteurs et incrémente la version — dans la transaction. */
   private async recalcAndTouch(tx: Prisma.TransactionClient, cartId: string): Promise<void> {
-    const items = await tx.cartItem.findMany({
-      where: { cartId },
-      select: { unitPriceMinor: true, quantity: true },
-    });
-    let totals;
-    try {
-      totals = computeCartTotals(items);
-    } catch {
-      throw new ValidationError('Cart total exceeds the maximum representable amount.');
-    }
-    await tx.cart.update({
-      where: { id: cartId },
-      data: {
-        subtotalMinor: totals.subtotalMinor,
-        totalMinor: totals.totalMinor,
-        itemCount: totals.itemCount,
-        version: { increment: 1 },
-        lastActivityAt: new Date(),
-        expiresAt: this.inactivityExpiry(),
-      },
-      select: { id: true },
-    });
+    await recalcAndTouchCart(
+      tx,
+      cartId,
+      this.configService.get<number>('CART_INACTIVITY_TTL_MINUTES') ?? 120,
+    );
   }
 
   private async reloadCart(clientOrTx: Prisma.TransactionClient, cartId: string): Promise<CartDetail> {
@@ -362,125 +393,20 @@ export class CartsService {
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
-        await this.lockCart(tx, cartId);
-        await this.claimMutation(tx, tenant, conversationId, input.clientMutationId);
-
-        const current = await tx.cart.findUniqueOrThrow({
-          where: { id: cartId },
-          select: { status: true, version: true, checkout: { select: { status: true } } },
-        });
-        this.assertMutable(current);
-        this.assertVersion(current, input.expectedVersion);
-
-        const existingItem = await tx.cartItem.findUnique({
-          where: { cartId_variantId: { cartId, variantId: variant.id } },
-          select: {
-            id: true,
-            quantity: true,
-            reservations: {
-              where: { status: 'ACTIVE' },
-              select: { id: true, variantId: true, organizationId: true, shopId: true },
-            },
-          },
-        });
-        const newQuantity = (existingItem?.quantity ?? 0) + input.quantity;
-        if (newQuantity > 999) {
-          throw new ValidationError('Maximum quantity per line is 999.');
-        }
-
-        // Disponibilité à l'ajout : le stock DISPONIBLE doit couvrir la
-        // quantité totale demandée (hors backorder). Les réservations de CE
-        // panier pour cette ligne ne comptent pas comme "pris".
-        if (variant.trackInventory && !variant.allowBackorder) {
-          const ownReserved = existingItem?.reservations.length ? existingItem.quantity : 0;
-          const available =
-            (variant.inventory?.quantityOnHand ?? 0) -
-            (variant.inventory?.quantityReserved ?? 0) +
-            ownReserved;
-          if (available < newQuantity && current.status === 'ACTIVE') {
-            throw new CartInsufficientStockError();
-          }
-        }
-
-        let itemId: string;
-        if (existingItem) {
-          itemId = existingItem.id;
-          await tx.cartItem.update({
-            where: { id: existingItem.id },
-            data: {
-              quantity: newQuantity,
-              lineSubtotalMinor: computeLineSubtotal(
-                (await tx.cartItem.findUniqueOrThrow({
-                  where: { id: existingItem.id },
-                  select: { unitPriceMinor: true },
-                })).unitPriceMinor,
-                newQuantity,
-              ),
-              version: { increment: 1 },
-            },
-            select: { id: true },
-          });
-          // Panier réservé : réserver UNIQUEMENT la différence (validé §18) —
-          // un échec annule toute la transaction.
-          if (current.status === 'CHECKOUT_STARTED' && existingItem.reservations[0]) {
-            await this.reservationService.adjustActiveReservation(
-              tx,
-              existingItem.reservations[0],
-              input.quantity,
-              tenant.userId,
-            );
-          }
-        } else {
-          const optionValues = variant.optionValues
-            .slice()
-            .sort((a, b) => a.option.position - b.option.position)
-            .map((link) => [link.option.name, link.optionValue.value]);
-          const created = await tx.cartItem.create({
-            data: {
-              organizationId: tenant.organizationId,
-              shopId: scope.shopId,
-              cartId,
-              productId: variant.productId,
-              variantId: variant.id,
-              quantity: input.quantity,
-              unitPriceMinor: variant.priceMinor,
-              compareAtPriceMinor: variant.compareAtPriceMinor,
-              lineSubtotalMinor: computeLineSubtotal(variant.priceMinor, input.quantity),
-              productNameSnapshot: variant.product.name,
-              variantNameSnapshot: variant.name,
-              skuSnapshot: variant.sku,
-              imageUrlSnapshot: variant.product.images[0]?.url ?? null,
-              optionValuesSnapshot: optionValues.length > 0 ? optionValues : Prisma.JsonNull,
-              currentPriceMinor: variant.priceMinor,
-            },
-            select: { id: true },
-          });
-          itemId = created.id;
-          if (current.status === 'CHECKOUT_STARTED') {
-            await this.reservationService.reserveForItem(tx, {
-              organizationId: tenant.organizationId,
-              shopId: scope.shopId,
-              cartId,
-              cartItemId: created.id,
-              variantId: variant.id,
-              quantity: input.quantity,
-              trackInventory: variant.trackInventory,
-              config: this.reservationConfig(),
-              actorUserId: tenant.userId,
-            });
-          }
-        }
-
-        await this.recalcAndTouch(tx, cartId);
-        await this.auditService.record(
+        await addItemToCartTx(
+          tx,
           {
             organizationId: tenant.organizationId,
-            eventType: 'CART_ITEM_ADDED',
-            actorUserId: tenant.userId,
-            metadata: { cartId, cartItemId: itemId, variantId: variant.id, quantity: input.quantity },
-            context,
+            shopId: scope.shopId,
+            conversationId,
+            cartId,
+            inactivityTtlMinutes: this.inactivityTtlMinutes(),
+            variant,
+            quantity: input.quantity,
+            expectedVersion: input.expectedVersion,
+            clientMutationId: input.clientMutationId,
           },
-          tx,
+          this.cartMutationDeps(tenant, scope.shopId, cartId, context),
         );
         return this.reloadCart(tx, cartId);
       });
@@ -501,73 +427,25 @@ export class CartsService {
     input: { quantity: number; expectedVersion?: number; clientMutationId?: string },
     context: AuditActionContext,
   ): Promise<CartDetail> {
-    await this.resolveConversation(tenant, conversationId, { writable: true });
+    const scope = await this.resolveConversation(tenant, conversationId, { writable: true });
     const cart = await this.requireOpenCartId(tenant, conversationId);
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
-        await this.lockCart(tx, cart.id);
-        await this.claimMutation(tx, tenant, conversationId, input.clientMutationId);
-
-        const current = await tx.cart.findUniqueOrThrow({
-          where: { id: cart.id },
-          select: { status: true, version: true, checkout: { select: { status: true } } },
-        });
-        this.assertMutable(current);
-        this.assertVersion(current, input.expectedVersion);
-
-        const item = await tx.cartItem.findFirst({
-          where: { id: cartItemId, cartId: cart.id },
-          select: {
-            id: true,
-            quantity: true,
-            unitPriceMinor: true,
-            variantId: true,
-            variant: { select: { trackInventory: true } },
-            reservations: {
-              where: { status: 'ACTIVE' },
-              select: { id: true, variantId: true, organizationId: true, shopId: true },
-            },
-          },
-        });
-        if (!item) {
-          throw new CartItemNotFoundError();
-        }
-        const delta = input.quantity - item.quantity;
-        if (delta === 0) {
-          throw new ValidationError('The quantity is unchanged.');
-        }
-
-        await tx.cartItem.update({
-          where: { id: item.id },
-          data: {
-            quantity: input.quantity,
-            lineSubtotalMinor: computeLineSubtotal(item.unitPriceMinor, input.quantity),
-            version: { increment: 1 },
-          },
-          select: { id: true },
-        });
-
-        // Panier réservé : delta réservé/libéré atomiquement (validé §18).
-        if (current.status === 'CHECKOUT_STARTED' && item.reservations[0]) {
-          await this.reservationService.adjustActiveReservation(
-            tx,
-            item.reservations[0],
-            delta,
-            tenant.userId,
-          );
-        }
-
-        await this.recalcAndTouch(tx, cart.id);
-        await this.auditService.record(
+        await updateCartItemQuantityTx(
+          tx,
           {
             organizationId: tenant.organizationId,
-            eventType: 'CART_ITEM_UPDATED',
-            actorUserId: tenant.userId,
-            metadata: { cartId: cart.id, cartItemId, quantity: input.quantity, delta },
-            context,
+            shopId: scope.shopId,
+            conversationId,
+            cartId: cart.id,
+            inactivityTtlMinutes: this.inactivityTtlMinutes(),
+            cartItemId,
+            quantity: input.quantity,
+            expectedVersion: input.expectedVersion,
+            clientMutationId: input.clientMutationId,
           },
-          tx,
+          this.cartMutationDeps(tenant, scope.shopId, cart.id, context),
         );
         return this.reloadCart(tx, cart.id);
       });
@@ -588,48 +466,22 @@ export class CartsService {
     input: { expectedVersion?: number },
     context: AuditActionContext,
   ): Promise<CartDetail> {
-    await this.resolveConversation(tenant, conversationId, { writable: true });
+    const scope = await this.resolveConversation(tenant, conversationId, { writable: true });
     const cart = await this.requireOpenCartId(tenant, conversationId);
 
     const result = await this.prisma.$transaction(async (tx) => {
-      await this.lockCart(tx, cart.id);
-      const current = await tx.cart.findUniqueOrThrow({
-        where: { id: cart.id },
-        select: { status: true, version: true, checkout: { select: { status: true } } },
-      });
-      this.assertMutable(current);
-      this.assertVersion(current, input.expectedVersion);
-
-      const item = await tx.cartItem.findFirst({
-        where: { id: cartItemId, cartId: cart.id },
-        select: {
-          id: true,
-          reservations: {
-            where: { status: 'ACTIVE' },
-            select: { id: true, variantId: true, quantity: true, organizationId: true, shopId: true },
-          },
-        },
-      });
-      if (!item) {
-        throw new CartItemNotFoundError();
-      }
-
-      // Release COMPLET avant suppression de la ligne (validé §18).
-      for (const reservation of item.reservations) {
-        await this.reservationService.releaseReservation(tx, reservation, 'RELEASED', 'item removed');
-      }
-      await tx.cartItem.delete({ where: { id: item.id }, select: { id: true } });
-
-      await this.recalcAndTouch(tx, cart.id);
-      await this.auditService.record(
+      await removeCartItemTx(
+        tx,
         {
           organizationId: tenant.organizationId,
-          eventType: 'CART_ITEM_REMOVED',
-          actorUserId: tenant.userId,
-          metadata: { cartId: cart.id, cartItemId },
-          context,
+          shopId: scope.shopId,
+          conversationId,
+          cartId: cart.id,
+          inactivityTtlMinutes: this.inactivityTtlMinutes(),
+          cartItemId,
+          expectedVersion: input.expectedVersion,
         },
-        tx,
+        this.cartMutationDeps(tenant, scope.shopId, cart.id, context),
       );
       return this.reloadCart(tx, cart.id);
     });

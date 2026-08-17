@@ -1,0 +1,25 @@
+{
+  "name": "@whauto/commerce",
+  "private": true,
+  "version": "0.0.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@whauto/database": "workspace:*",
+    "@whauto/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@whauto/eslint-config": "workspace:*",
+    "@whauto/tsconfig": "workspace:*",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
