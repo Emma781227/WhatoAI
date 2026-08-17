@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MetaCloudWhatsAppProvider } from './meta-provider';
 import { WhatsAppProviderSendError } from './types';
@@ -287,6 +287,65 @@ describe('MetaCloudWhatsAppProvider.parseInboundEventsByPhoneNumber — routage 
       }),
     ).toEqual([]);
     expect(provider().parseInboundEventsByPhoneNumber({ body: null })).toEqual([]);
+  });
+});
+
+describe('MetaCloudWhatsAppProvider — profil WhatsApp Business', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('getBusinessProfile normalise data[0] (GET, jamais d’envoi)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            { about: 'Boutique', description: 'Desc', email: 'a@b.co', websites: ['https://x.co'], vertical: 'RETAIL', profile_picture_url: 'https://img' },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const profile = await provider().getBusinessProfile();
+    expect(profile).toEqual({
+      about: 'Boutique',
+      address: null,
+      description: 'Desc',
+      email: 'a@b.co',
+      vertical: 'RETAIL',
+      websites: ['https://x.co'],
+      profilePictureUrl: 'https://img',
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/123456/whatsapp_business_profile?fields=');
+    expect(init.method).toBe('GET');
+  });
+
+  it('updateBusinessProfile n’envoie QUE les champs fournis + messaging_product', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await provider().updateBusinessProfile({ about: 'Nouveau', websites: ['https://x.co'] });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/123456/whatsapp_business_profile');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      messaging_product: 'whatsapp',
+      about: 'Nouveau',
+      websites: ['https://x.co'],
+    });
+  });
+
+  it('erreur Meta (token invalide) → WhatsAppProviderSendError classé CONFIGURATION_ERROR', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: 190, message: 'bad token' } }), { status: 401, headers: { 'content-type': 'application/json' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(provider().getBusinessProfile()).rejects.toMatchObject({ errorClass: 'CONFIGURATION_ERROR' });
   });
 });
 

@@ -85,6 +85,17 @@ export class MetaOnboardingClient {
     };
   }
 
+  /**
+   * Lit l'ID utilisateur Facebook (app-scoped) de l'auteur de l'onboarding —
+   * indispensable pour rattacher les callbacks Meta (deauthorize / data-deletion)
+   * au bon commerçant. Best-effort : l'appelant tolère un échec (retourne null).
+   */
+  async getAuthenticatedUser(accessToken: string): Promise<{ id: string } | null> {
+    const url = `${this.base()}/me?fields=id`;
+    const parsed = (await this.request('GET', url, accessToken)) as { id?: string };
+    return typeof parsed?.id === 'string' && parsed.id.length > 0 ? { id: parsed.id } : null;
+  }
+
   private base(): string {
     return `${this.config.graphBaseUrl}/${this.config.graphApiVersion}`;
   }

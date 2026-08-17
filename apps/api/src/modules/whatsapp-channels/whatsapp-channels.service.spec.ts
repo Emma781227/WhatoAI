@@ -47,6 +47,13 @@ function buildMocks() {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       findUniqueOrThrow: jest.fn().mockResolvedValue(channelRow()),
     },
+    whatsAppConnection: {
+      findMany: jest.fn().mockResolvedValue([]),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    metaWhatsAppCredential: {
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     $transaction: jest.fn(),
   };
   prisma.$transaction.mockImplementation(async (arg: unknown) =>
@@ -66,7 +73,7 @@ function buildMocks() {
     configService as unknown as ConfigService,
     { isConfigured: () => true, encrypt: (s: string) => `v1.enc.${s}`, decrypt: (s: string) => s } as unknown as import('../../crypto/secrets-encryption.service').SecretsEncryptionService,
   );
-  return { service, prisma, auditService };
+  return { service, prisma, auditService, providerFactory, configService };
 }
 
 describe('WhatsAppChannelsService', () => {
@@ -193,6 +200,121 @@ describe('WhatsAppChannelsService', () => {
       await expect(service.disconnect(TENANT, 'shop-1', {})).rejects.toThrow(
         WhatsAppChannelNotFoundError,
       );
+    });
+
+    it('multi-tenant : clôt la connexion ET révoque le credential (token inutilisable)', async () => {
+      const { service, prisma } = buildMocks();
+      prisma.whatsAppChannel.findFirst.mockResolvedValue(channelRow({ provider: 'META_CLOUD' }));
+      prisma.whatsAppChannel.updateMany.mockResolvedValue({ count: 1 });
+      prisma.whatsAppConnection.findMany.mockResolvedValue([
+        { id: 'conn-1', metaWhatsAppCredentialId: 'cred-1' },
+      ]);
+      prisma.whatsAppConnection.updateMany.mockResolvedValue({ count: 1 });
+      prisma.metaWhatsAppCredential.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.disconnect(TENANT, 'shop-1', {});
+
+      expect(prisma.whatsAppConnection.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: { in: ['conn-1'] } },
+          data: expect.objectContaining({ status: 'DISCONNECTED' }),
+        }),
+      );
+      expect(prisma.metaWhatsAppCredential.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: { in: ['cred-1'] },
+            status: { not: 'REVOKED' },
+          }),
+          data: expect.objectContaining({ status: 'REVOKED' }),
+        }),
+      );
+    });
+
+    it('MOCK/pilote : aucune connexion → aucune révocation de credential', async () => {
+      const { service, prisma } = buildMocks();
+      prisma.whatsAppChannel.findFirst.mockResolvedValue(channelRow());
+      prisma.whatsAppChannel.updateMany.mockResolvedValue({ count: 1 });
+      // findMany renvoie [] par défaut (aucune connexion Meta).
+      await service.disconnect(TENANT, 'shop-1', {});
+      expect(prisma.whatsAppConnection.updateMany).not.toHaveBeenCalled();
+      expect(prisma.metaWhatsAppCredential.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('profil WhatsApp Business (pilote)', () => {
+    const PROFILE = {
+      about: 'Ma boutique',
+      address: null,
+      description: null,
+      email: null,
+      vertical: 'RETAIL',
+      websites: [],
+      profilePictureUrl: null,
+    };
+
+    function withMetaChannel() {
+      const built = buildMocks();
+      // getMetaChannel : un canal META_CLOUD actif.
+      built.prisma.whatsAppChannel.findFirst.mockResolvedValue(
+        channelRow({ provider: 'META_CLOUD' }),
+      );
+      built.providerFactory.isMetaConfigured.mockReturnValue(true);
+      // META_MULTI_TENANT_ENABLED absent → chemin pilote (provider env).
+      built.configService.get.mockReturnValue(undefined);
+      return built;
+    }
+
+    it('getBusinessProfile renvoie le profil du provider (GET, aucun envoi)', async () => {
+      const built = withMetaChannel();
+      const provider = { getBusinessProfile: jest.fn().mockResolvedValue(PROFILE) };
+      built.providerFactory.getMetaProvider.mockReturnValue(provider);
+
+      const result = await built.service.getBusinessProfile(TENANT, 'shop-1');
+      expect(result).toEqual(PROFILE);
+      expect(provider.getBusinessProfile).toHaveBeenCalledTimes(1);
+    });
+
+    it('updateBusinessProfile n’envoie que les champs fournis + audite les NOMS de champs', async () => {
+      const built = withMetaChannel();
+      const provider = {
+        updateBusinessProfile: jest.fn().mockResolvedValue(undefined),
+        getBusinessProfile: jest.fn().mockResolvedValue(PROFILE),
+      };
+      built.providerFactory.getMetaProvider.mockReturnValue(provider);
+
+      const result = await built.service.updateBusinessProfile(
+        TENANT,
+        'shop-1',
+        { about: 'Nouveau', vertical: undefined, websites: ['https://x.co'] },
+        {},
+      );
+      expect(result).toEqual(PROFILE);
+      // vertical (undefined) exclu ; seuls about + websites envoyés.
+      expect(provider.updateBusinessProfile).toHaveBeenCalledWith({
+        about: 'Nouveau',
+        websites: ['https://x.co'],
+      });
+      expect(built.auditService.recordSafe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'META_PROFILE_UPDATED',
+          metadata: expect.objectContaining({ changedFields: ['about', 'websites'] }),
+        }),
+      );
+    });
+
+    it('erreur provider → MetaApiError (jamais l’erreur brute)', async () => {
+      const built = withMetaChannel();
+      const { WhatsAppProviderSendError } = jest.requireActual('@whauto/whatsapp');
+      const provider = {
+        getBusinessProfile: jest
+          .fn()
+          .mockRejectedValue(new WhatsAppProviderSendError('x', 'META_190', 'CONFIGURATION_ERROR')),
+      };
+      built.providerFactory.getMetaProvider.mockReturnValue(provider);
+      await expect(built.service.getBusinessProfile(TENANT, 'shop-1')).rejects.toMatchObject({
+        code: 'META_190',
+      });
     });
   });
 });

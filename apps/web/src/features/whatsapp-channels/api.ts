@@ -45,6 +45,50 @@ export interface EmbeddedSignupInput {
   businessId: string;
 }
 
+/** Verticales WhatsApp Business (alignées sur le backend/Meta). */
+export const WHATSAPP_BUSINESS_VERTICALS = [
+  'UNDEFINED',
+  'OTHER',
+  'AUTO',
+  'BEAUTY',
+  'APPAREL',
+  'EDU',
+  'ENTERTAIN',
+  'EVENT_PLAN',
+  'FINANCE',
+  'GROCERY',
+  'GOVT',
+  'HOTEL',
+  'HEALTH',
+  'NONPROFIT',
+  'PROF_SERVICES',
+  'RETAIL',
+  'TRAVEL',
+  'RESTAURANT',
+  'NOT_A_BIZ',
+] as const;
+
+export interface WhatsAppBusinessProfile {
+  about: string | null;
+  address: string | null;
+  description: string | null;
+  email: string | null;
+  vertical: string | null;
+  websites: string[];
+  /** Lecture seule (la photo se gère hors Whauto pour l'instant). */
+  profilePictureUrl: string | null;
+}
+
+/** Champs modifiables ; champ absent = inchangé, chaîne vide = effacement. */
+export interface BusinessProfileUpdate {
+  about?: string;
+  address?: string;
+  description?: string;
+  email?: string;
+  vertical?: string;
+  websites?: string[];
+}
+
 function channelBase(organizationId: string, shopId: string): string {
   return `/organizations/${organizationId}/shops/${shopId}/whatsapp-channel`;
 }
@@ -72,6 +116,17 @@ export const whatsappChannelsApi = {
       { method: 'POST', body: input },
     );
   },
+  getProfile(organizationId: string, shopId: string) {
+    return apiRequest<WhatsAppBusinessProfile>(
+      `${channelBase(organizationId, shopId)}/meta/profile`,
+    );
+  },
+  updateProfile(organizationId: string, shopId: string, input: BusinessProfileUpdate) {
+    return apiRequest<WhatsAppBusinessProfile>(
+      `${channelBase(organizationId, shopId)}/meta/profile`,
+      { method: 'PATCH', body: input },
+    );
+  },
 };
 
 /** Query keys scoppées organizationId + shopId : aucun mélange inter-tenant/inter-shop. */
@@ -79,4 +134,6 @@ export const whatsappChannelKeys = {
   all: (organizationId: string) => ['organizations', organizationId, 'whatsapp-channels'] as const,
   forShop: (organizationId: string, shopId: string) =>
     [...whatsappChannelKeys.all(organizationId), 'shop', shopId] as const,
+  profile: (organizationId: string, shopId: string) =>
+    [...whatsappChannelKeys.forShop(organizationId, shopId), 'profile'] as const,
 };

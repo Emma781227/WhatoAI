@@ -101,6 +101,7 @@ enum OrganizationAuditEventType {
   META_CHANNEL_CONNECTED
   META_CHANNEL_TESTED
   META_CHANNEL_ERROR
+  META_PROFILE_UPDATED
   AI_CONFIGURATION_UPDATED
   AI_SUGGESTION_GENERATED
   AI_SUGGESTION_ACCEPTED
@@ -1081,6 +1082,9 @@ model MetaWhatsAppCredential {
   expiresAt             DateTime?
   revokedAt             DateTime?
   status                String    @default("ACTIVE") // ACTIVE / EXPIRED / REVOKED
+  // ID utilisateur Facebook (app-scoped) de l'auteur de l'onboarding — sert à
+  // rattacher les callbacks Meta (deauthorize / data-deletion) au commerçant.
+  facebookUserId        String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
@@ -1091,7 +1095,27 @@ model MetaWhatsAppCredential {
   @@unique([id, organizationId])
   @@index([organizationId])
   @@index([metaBusinessAccountId, status])
+  @@index([facebookUserId, status])
   @@map("meta_whatsapp_credentials")
+}
+
+/**
+ * Trace durable des demandes de suppression de données Meta (Data Deletion
+ * Callback). Meta exige de renvoyer un `confirmation_code` + une URL de statut.
+ * On révoque immédiatement les credentials Meta du user concerné ; la suppression
+ * métier complète relève de la suppression d'organisation.
+ */
+model MetaDataDeletionRequest {
+  id                 String    @id @default(cuid())
+  confirmationCode   String    @unique
+  facebookUserId     String
+  status             String    @default("RECEIVED") // RECEIVED / PROCESSED
+  credentialsRevoked Int       @default(0)
+  createdAt          DateTime  @default(now())
+  processedAt        DateTime?
+
+  @@index([facebookUserId])
+  @@map("meta_data_deletion_requests")
 }
 
 // Un numéro WhatsApp sous la WABA (identifiants NON secrets).

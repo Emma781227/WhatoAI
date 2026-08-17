@@ -31,6 +31,14 @@ export const apiEnvSchema = baseEnvSchema.extend({
   // Strict par défaut — règle de sécurité CLAUDE.md (cookie httpOnly + SameSite=Strict).
   COOKIE_SAME_SITE: z.enum(['lax', 'strict', 'none']).default('strict'),
 
+  // URL publique de l'API (derrière tunnel/proxy en prod) — sert à construire
+  // l'URL de statut renvoyée au callback Data Deletion de Meta.
+  API_PUBLIC_URL: z.string().url().default('http://localhost:4000'),
+  // Pages légales exigées par l'App Review Meta (Privacy Policy / Terms).
+  // Optionnelles ici : référencées dans la doc de readiness et le frontend.
+  PRIVACY_POLICY_URL: z.string().url().optional(),
+  TERMS_URL: z.string().url().optional(),
+
   // Auth — liens frontend / email
   APP_WEB_URL: z.string().url().default('http://localhost:3000'),
   EMAIL_PROVIDER: z.enum(['console']).default('console'),

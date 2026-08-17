@@ -1,4 +1,15 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiCreatedResponse,
@@ -16,6 +27,10 @@ import { TenantGuard } from '../../common/tenant/tenant.guard';
 import type { TenantContext } from '../../common/tenant/tenant-context.interface';
 import { EmailVerifiedGuard } from '../auth/email-verified.guard';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import {
+  BusinessProfileResponseDto,
+  UpdateBusinessProfileDto,
+} from './dto/business-profile.dto';
 import { WhatsAppChannelResponseDto } from './dto/channel-responses.dto';
 import { CreateMockChannelDto } from './dto/create-mock-channel.dto';
 import {
@@ -126,6 +141,31 @@ export class WhatsAppChannelsController {
       actionContext(req),
     );
     return { sent: true, providerMessageId: result.providerMessageId };
+  }
+
+  @Get('meta/profile')
+  @RequirePermissions(PERMISSIONS.WHATSAPP_CHANNELS_MANAGE)
+  @ApiOperation({ summary: 'Profil WhatsApp Business du canal (GET Graph — aucun envoi)' })
+  @ApiOkResponse({ type: BusinessProfileResponseDto })
+  async getProfile(
+    @CurrentTenant() tenant: TenantContext,
+    @Param('shopId') shopId: string,
+  ): Promise<BusinessProfileResponseDto> {
+    return this.channelsService.getBusinessProfile(tenant, shopId);
+  }
+
+  @Patch('meta/profile')
+  @UseGuards(EmailVerifiedGuard)
+  @RequirePermissions(PERMISSIONS.WHATSAPP_CHANNELS_MANAGE)
+  @ApiOperation({ summary: 'Mettre à jour le profil WhatsApp Business (renvoie l’état frais)' })
+  @ApiOkResponse({ type: BusinessProfileResponseDto })
+  async updateProfile(
+    @CurrentTenant() tenant: TenantContext,
+    @Param('shopId') shopId: string,
+    @Body() dto: UpdateBusinessProfileDto,
+    @Req() req: Request,
+  ): Promise<BusinessProfileResponseDto> {
+    return this.channelsService.updateBusinessProfile(tenant, shopId, dto, actionContext(req));
   }
 
   @Get()

@@ -15,6 +15,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { AiConfigCard } from '@/features/ai-config/components/ai-config-card';
 import { useOrganization } from '@/features/organizations/organization-provider';
 import { shopKeys, shopsApi } from '@/features/shops/api';
+import { whatsappChannelKeys, whatsappChannelsApi } from '@/features/whatsapp-channels/api';
+import { WhatsAppProfileForm } from '@/features/whatsapp-channels/components/whatsapp-profile-form';
 import { OpeningHoursEditor } from '@/features/shops/components/opening-hours-editor';
 import { ShopForm } from '@/features/shops/components/shop-form';
 import { buildShopPatch, shopToFormValues } from '@/features/shops/patch';
@@ -37,6 +39,14 @@ export default function ShopSettingsPage() {
   const hoursQuery = useQuery({
     queryKey: shopKeys.openingHours(organizationId, shopId),
     queryFn: () => shopsApi.getOpeningHours(organizationId, shopId),
+  });
+
+  // Canal WhatsApp : le profil ne s'affiche que pour un canal Meta connecté.
+  // 404 (aucun canal) n'est pas une erreur ici — retry désactivé.
+  const channelQuery = useQuery({
+    queryKey: whatsappChannelKeys.forShop(organizationId, shopId),
+    queryFn: () => whatsappChannelsApi.get(organizationId, shopId),
+    retry: false,
   });
 
   if (shopQuery.isPending) {
@@ -135,6 +145,12 @@ export default function ShopSettingsPage() {
             )}
           </CardContent>
         </Card>
+
+        {can(PERMISSIONS.WHATSAPP_CHANNELS_MANAGE) &&
+        channelQuery.data?.provider === 'META_CLOUD' &&
+        channelQuery.data.status === 'CONNECTED' ? (
+          <WhatsAppProfileForm shopId={shopId} />
+        ) : null}
 
         {can(PERMISSIONS.AI_READ) ? <AiConfigCard shopId={shopId} /> : null}
       </div>

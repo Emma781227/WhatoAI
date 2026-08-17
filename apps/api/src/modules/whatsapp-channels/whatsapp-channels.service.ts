@@ -11,11 +11,17 @@ import {
   ShopNotFoundError,
   WhatsAppChannelAlreadyActiveError,
   WhatsAppChannelNotFoundError,
+  WhatsAppConnectionNotResolvedError,
 } from '@whauto/shared';
 import {
+  MetaCloudWhatsAppProvider,
   MetaOnboardingClient,
   normalizePhoneNumber,
   WhatsAppProviderSendError,
+} from '@whauto/whatsapp';
+import type {
+  WhatsAppBusinessProfile,
+  WhatsAppBusinessProfileUpdate,
 } from '@whauto/whatsapp';
 
 import type { TenantContext } from '../../common/tenant/tenant-context.interface';
@@ -193,6 +199,11 @@ export class WhatsAppChannelsService {
    * libère le slot actif de la Shop). Fonctionne aussi sur un canal ERROR
    * ("réparation" = le clore explicitement). Idempotence : un canal déjà
    * déconnecté → 404 (il n'y a plus de canal courant).
+   *
+   * MULTI-TENANT : clôt AUSSI la connexion Meta de la Shop et RÉVOQUE le
+   * credential (token chiffré). Sécurité : un commerçant déconnecté ne doit plus
+   * disposer d'un token utilisable — le worker refuse alors tout envoi (aucune
+   * connexion active résolvable). Sans effet sur MOCK/pilote (aucune connexion).
    */
   async disconnect(
     tenant: TenantContext,
@@ -215,25 +226,34 @@ export class WhatsAppChannelsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      const now = new Date();
       const updated = await tx.whatsAppChannel.updateMany({
         where: {
           id: channel.id,
           organizationId: tenant.organizationId,
           status: { in: [...ACTIVE_CHANNEL_STATUSES, 'ERROR'] },
         },
-        data: { status: 'DISCONNECTED', disconnectedAt: new Date() },
+        data: { status: 'DISCONNECTED', disconnectedAt: now },
       });
       if (updated.count !== 1) {
         // Déconnecté concurremment.
         throw new WhatsAppChannelNotFoundError();
       }
 
+      const teardown = await this.teardownActiveConnections(tx, tenant.organizationId, shopId, now);
+
       await this.auditService.record(
         {
           organizationId: tenant.organizationId,
           eventType: 'WHATSAPP_CHANNEL_DISCONNECTED',
           actorUserId: tenant.userId,
-          metadata: { channelId: channel.id, shopId, previousStatus: channel.status },
+          metadata: {
+            channelId: channel.id,
+            shopId,
+            previousStatus: channel.status,
+            connectionsClosed: teardown.connectionsClosed,
+            credentialsRevoked: teardown.credentialsRevoked,
+          },
           context,
         },
         tx,
@@ -244,6 +264,42 @@ export class WhatsAppChannelsService {
         select: WHATSAPP_CHANNEL_PUBLIC_SELECT,
       });
     });
+  }
+
+  /**
+   * Clôt toutes les connexions Meta actives d'une Shop et révoque leurs
+   * credentials (token chiffré inutilisable ensuite). Idempotent et no-op quand
+   * il n'y a aucune connexion (MOCK/pilote). À exécuter DANS une transaction.
+   */
+  private async teardownActiveConnections(
+    tx: Prisma.TransactionClient,
+    organizationId: string,
+    shopId: string,
+    now: Date,
+  ): Promise<{ connectionsClosed: number; credentialsRevoked: number }> {
+    const active = await tx.whatsAppConnection.findMany({
+      where: { organizationId, shopId, status: { in: [...ACTIVE_CHANNEL_STATUSES] } },
+      select: { id: true, metaWhatsAppCredentialId: true },
+    });
+    if (active.length === 0) {
+      return { connectionsClosed: 0, credentialsRevoked: 0 };
+    }
+
+    const closed = await tx.whatsAppConnection.updateMany({
+      where: { id: { in: active.map((c) => c.id) } },
+      data: { status: 'DISCONNECTED', disconnectedAt: now },
+    });
+    // Révocation locale du token : le worker ne résout que des credentials ACTIVE.
+    // (La révocation côté Meta reste un appel Graph externe hors périmètre ici.)
+    const revoked = await tx.metaWhatsAppCredential.updateMany({
+      where: {
+        organizationId,
+        id: { in: active.map((c) => c.metaWhatsAppCredentialId) },
+        status: { not: 'REVOKED' },
+      },
+      data: { status: 'REVOKED', revokedAt: now },
+    });
+    return { connectionsClosed: closed.count, credentialsRevoked: revoked.count };
   }
 
   /**
@@ -355,11 +411,14 @@ export class WhatsAppChannelsService {
     const client = this.getOnboardingClient();
     let accessTokenEncrypted: string;
     let expiresAt: Date | null;
+    let facebookUserId: string | null = null;
     let phone: { displayPhoneNumber: string | null; verifiedName: string | null; qualityRating: string | null };
     try {
       const token = await client.exchangeCodeForToken(input.code);
       await client.subscribeApp(input.wabaId, token.accessToken);
       phone = await client.getPhoneNumber(input.phoneNumberId, token.accessToken);
+      // ID FB de l'auteur (best-effort) : rattache les callbacks Meta au commerçant.
+      facebookUserId = (await client.getAuthenticatedUser(token.accessToken).catch(() => null))?.id ?? null;
       // Chiffrement immédiat : le clair ne quitte jamais cette portée.
       accessTokenEncrypted = this.secrets.encrypt(token.accessToken);
       expiresAt = token.expiresInSeconds ? new Date(Date.now() + token.expiresInSeconds * 1000) : null;
@@ -390,6 +449,7 @@ export class WhatsAppChannelsService {
             tokenType: 'SYSTEM_USER',
             scopes: ['whatsapp_business_messaging', 'whatsapp_business_management'],
             expiresAt,
+            facebookUserId,
             status: 'ACTIVE',
           },
           select: { id: true },
@@ -413,11 +473,16 @@ export class WhatsAppChannelsService {
           select: { id: true },
         });
 
-        // Connexion : clôt l'active précédente (index partiel une active/Shop) puis crée.
-        await tx.whatsAppConnection.updateMany({
-          where: { organizationId: tenant.organizationId, shopId, status: { in: [...ACTIVE_CHANNEL_STATUSES] } },
-          data: { status: 'DISCONNECTED', disconnectedAt: now },
-        });
+        // Reconnexion : clôt l'active précédente (index partiel une active/Shop)
+        // ET révoque son ancien token — jamais deux credentials vivants pour la
+        // même Shop. Le NOUVEAU credential créé ci-dessus n'est pas concerné
+        // (aucune connexion active ne le référence encore).
+        const superseded = await this.teardownActiveConnections(
+          tx,
+          tenant.organizationId,
+          shopId,
+          now,
+        );
         const connection = await tx.whatsAppConnection.create({
           data: {
             organizationId: tenant.organizationId,
@@ -465,6 +530,8 @@ export class WhatsAppChannelsService {
               shopId,
               phoneNumberId: input.phoneNumberId,
               wabaId: input.wabaId,
+              // Reconnexion : nombre d'anciens tokens révoqués (0 = 1ʳᵉ connexion).
+              supersededCredentialsRevoked: superseded.credentialsRevoked,
             },
             context,
           },
@@ -582,6 +649,118 @@ export class WhatsAppChannelsService {
       const code = error instanceof WhatsAppProviderSendError ? error.code : 'META_TEST_SEND_FAILED';
       throw new MetaApiError(code);
     }
+  }
+
+  /**
+   * Lit le profil WhatsApp Business du canal Meta de la Shop (GET Graph, aucun
+   * envoi). En multi-tenant le token du commerçant est utilisé ; sinon le
+   * provider pilote (env). Aucun secret renvoyé.
+   */
+  async getBusinessProfile(
+    tenant: TenantContext,
+    shopId: string,
+  ): Promise<WhatsAppBusinessProfile> {
+    await this.getMetaChannel(tenant, shopId);
+    const provider = await this.resolveMetaProviderForShop(tenant.organizationId, shopId);
+    try {
+      return await provider.getBusinessProfile();
+    } catch (error) {
+      throw this.toMetaApiError(error);
+    }
+  }
+
+  /**
+   * Met à jour le profil WhatsApp Business puis relit l'état frais. Audit
+   * `META_PROFILE_UPDATED` avec la LISTE des champs modifiés (jamais leur
+   * contenu) dans la même logique que SHOP_UPDATED.
+   */
+  async updateBusinessProfile(
+    tenant: TenantContext,
+    shopId: string,
+    input: WhatsAppBusinessProfileUpdate,
+    context: AuditActionContext,
+  ): Promise<WhatsAppBusinessProfile> {
+    const channel = await this.getMetaChannel(tenant, shopId);
+    const provider = await this.resolveMetaProviderForShop(tenant.organizationId, shopId);
+
+    // Ne conserve que les champs réellement fournis (undefined = inchangé).
+    const update: WhatsAppBusinessProfileUpdate = {};
+    const fields: Array<keyof WhatsAppBusinessProfileUpdate> = [
+      'about',
+      'address',
+      'description',
+      'email',
+      'vertical',
+      'websites',
+    ];
+    for (const field of fields) {
+      if (input[field] !== undefined) {
+        (update as Record<string, unknown>)[field] = input[field];
+      }
+    }
+    const changedFields = Object.keys(update);
+
+    try {
+      await provider.updateBusinessProfile(update);
+      const profile = await provider.getBusinessProfile();
+      await this.auditService.recordSafe({
+        organizationId: tenant.organizationId,
+        eventType: 'META_PROFILE_UPDATED',
+        actorUserId: tenant.userId,
+        // Jamais le contenu : uniquement les noms de champs modifiés.
+        metadata: { channelId: channel.id, shopId, changedFields },
+        context,
+      });
+      return profile;
+    } catch (error) {
+      throw this.toMetaApiError(error);
+    }
+  }
+
+  /** Traduit une erreur provider Meta en MetaApiError (code non sensible). */
+  private toMetaApiError(error: unknown): MetaApiError {
+    const code = error instanceof WhatsAppProviderSendError ? error.code : 'META_PROFILE_FAILED';
+    return new MetaApiError(code);
+  }
+
+  /**
+   * Résout le provider Meta à utiliser pour une Shop. Multi-tenant : token
+   * DÉCHIFFRÉ + phone_number_id de la connexion active (jamais de repli sur un
+   * autre numéro — fuite cross-tenant). Pilote : provider env partagé.
+   */
+  private async resolveMetaProviderForShop(
+    organizationId: string,
+    shopId: string,
+  ): Promise<MetaCloudWhatsAppProvider> {
+    if (this.configService.get('META_MULTI_TENANT_ENABLED') !== true) {
+      if (!this.providerFactory.isMetaConfigured()) {
+        throw new MetaChannelConfigurationError();
+      }
+      return this.providerFactory.getMetaProvider();
+    }
+    if (!this.secrets.isConfigured()) {
+      throw new MetaChannelConfigurationError();
+    }
+    const connection = await this.prisma.whatsAppConnection.findFirst({
+      where: { organizationId, shopId, status: { in: [...ACTIVE_CHANNEL_STATUSES] } },
+      select: {
+        phoneNumber: { select: { phoneNumberId: true } },
+        credential: { select: { accessTokenEncrypted: true, status: true } },
+      },
+    });
+    if (!connection || connection.credential.status !== 'ACTIVE') {
+      throw new WhatsAppConnectionNotResolvedError(shopId);
+    }
+    const accessToken = this.secrets.decrypt(connection.credential.accessTokenEncrypted);
+    return new MetaCloudWhatsAppProvider({
+      appSecret: this.configService.get<string>('META_APP_SECRET'),
+      graphApiVersion: this.configService.get<string>('META_GRAPH_API_VERSION') ?? 'v21.0',
+      graphBaseUrl:
+        this.configService.get<string>('META_GRAPH_API_BASE_URL') ?? 'https://graph.facebook.com',
+      requestTimeoutMs: this.configService.get<number>('META_REQUEST_TIMEOUT_MS'),
+      accessToken,
+      phoneNumberId: connection.phoneNumber.phoneNumberId,
+    });
   }
 
   private async validateMetaOrThrow(

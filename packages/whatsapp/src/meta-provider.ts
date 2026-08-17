@@ -10,6 +10,8 @@ import type {
   RawInboundEvent,
   SendMessageResult,
   SendTextMessageInput,
+  WhatsAppBusinessProfile,
+  WhatsAppBusinessProfileUpdate,
   WhatsAppProviderName,
 } from './types';
 import { WhatsAppProviderSendError } from './types';
@@ -356,6 +358,60 @@ export class MetaCloudWhatsAppProvider implements WhatsAppProvider {
       displayPhoneNumber: response.display_phone_number,
       verifiedName: response.verified_name,
     };
+  }
+
+  /**
+   * Lit le profil WhatsApp Business (endpoint `whatsapp_business_profile`).
+   * GET Graph, aucun envoi. Ne renvoie aucun secret. `profile_picture_url` est
+   * exposé en lecture seule (la mise à jour de la photo est hors périmètre).
+   */
+  async getBusinessProfile(): Promise<WhatsAppBusinessProfile> {
+    if (!this.config.accessToken || !this.config.phoneNumberId) {
+      throw new WhatsAppProviderSendError(
+        'Meta configuration is incomplete.',
+        'META_NOT_CONFIGURED',
+        'CONFIGURATION_ERROR',
+      );
+    }
+    const fields = 'about,address,description,email,profile_picture_url,vertical,websites';
+    const url = `${this.config.graphBaseUrl}/${this.config.graphApiVersion}/${this.config.phoneNumberId}/whatsapp_business_profile?fields=${fields}`;
+    const response = (await this.get(url)) as { data?: Array<Record<string, unknown>> };
+    const profile = response.data?.[0] ?? {};
+    const asString = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+    return {
+      about: asString(profile.about),
+      address: asString(profile.address),
+      description: asString(profile.description),
+      email: asString(profile.email),
+      vertical: asString(profile.vertical),
+      websites: Array.isArray(profile.websites) ? (profile.websites as string[]) : [],
+      profilePictureUrl: asString(profile.profile_picture_url),
+    };
+  }
+
+  /**
+   * Met à jour le profil WhatsApp Business (POST Graph). Seuls les champs
+   * FOURNIS sont envoyés (`undefined` = inchangé). La photo n'est pas gérée ici
+   * (nécessite un handle Resumable Upload). Renvoie void ; l'appelant relit le
+   * profil pour l'état frais.
+   */
+  async updateBusinessProfile(input: WhatsAppBusinessProfileUpdate): Promise<void> {
+    if (!this.config.accessToken || !this.config.phoneNumberId) {
+      throw new WhatsAppProviderSendError(
+        'Meta configuration is incomplete.',
+        'META_NOT_CONFIGURED',
+        'CONFIGURATION_ERROR',
+      );
+    }
+    const payload: Record<string, unknown> = { messaging_product: 'whatsapp' };
+    if (input.about !== undefined) payload.about = input.about;
+    if (input.address !== undefined) payload.address = input.address;
+    if (input.description !== undefined) payload.description = input.description;
+    if (input.email !== undefined) payload.email = input.email;
+    if (input.vertical !== undefined) payload.vertical = input.vertical;
+    if (input.websites !== undefined) payload.websites = input.websites;
+    const url = `${this.config.graphBaseUrl}/${this.config.graphApiVersion}/${this.config.phoneNumberId}/whatsapp_business_profile`;
+    await this.post(url, payload);
   }
 
   private async post(url: string, payload: unknown): Promise<unknown> {

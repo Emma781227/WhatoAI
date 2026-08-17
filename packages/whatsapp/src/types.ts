@@ -108,6 +108,32 @@ export interface MarkMessageAsReadInput {
 }
 
 /**
+ * Profil WhatsApp Business (endpoint Graph `whatsapp_business_profile`). Champs
+ * publics affichés au client final. `profilePictureUrl` est en LECTURE seule
+ * ici : la mise à jour de la photo passe par l'API Resumable Upload de Meta
+ * (handle), volontairement hors périmètre de cette phase.
+ */
+export interface WhatsAppBusinessProfile {
+  about: string | null;
+  address: string | null;
+  description: string | null;
+  email: string | null;
+  vertical: string | null;
+  websites: string[];
+  profilePictureUrl: string | null;
+}
+
+/** Champs modifiables du profil. `undefined` = inchangé ; '' = effacement. */
+export interface WhatsAppBusinessProfileUpdate {
+  about?: string;
+  address?: string;
+  description?: string;
+  email?: string;
+  vertical?: string;
+  websites?: string[];
+}
+
+/**
  * Classification d'une erreur provider — pilote la décision retry du worker.
  * - RETRYABLE : transitoire (rate limit, timeout, 5xx) → nouvelle tentative ;
  * - NON_RETRYABLE : définitif (numéro invalide, payload) → FAILED immédiat ;
