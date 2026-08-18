@@ -22,6 +22,8 @@ export type CartLineAvailability =
   | 'PRODUCT_UNAVAILABLE'
   | 'VARIANT_UNAVAILABLE';
 
+export type CartItemSource = 'HUMAN' | 'AI';
+
 export interface CartItem {
   id: string;
   productId: string;
@@ -37,6 +39,8 @@ export interface CartItem {
   optionValues: Array<[string, string]> | null;
   availabilityStatus: CartLineAvailability;
   currentPriceMinor: number | null;
+  /** Origine de la ligne : AI = ajoutée par l'assistant pendant une conversation. */
+  addedBySource: CartItemSource;
   version: number;
   reservation: {
     id: string;

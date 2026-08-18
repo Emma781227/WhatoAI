@@ -319,6 +319,9 @@ importers:
       '@whauto/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@whauto/commerce':
+        specifier: workspace:*
+        version: link:../../packages/commerce
       '@whauto/config':
         specifier: workspace:*
         version: link:../../packages/config

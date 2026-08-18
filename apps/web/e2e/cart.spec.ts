@@ -318,6 +318,71 @@ test('checkout démarré puis annulé : réservation affichée, puis libérée e
   await expect(panel.getByTestId('reservation-countdown')).toHaveCount(0);
 });
 
+/**
+ * AI-C / W3 — le différenciateur de bout en bout : un message CLIENT déclenche
+ * un run IA qui appelle l'outil WRITE `add_to_cart`, et l'agent voit la ligne
+ * apparaître dans le panneau Panier, marquée comme venant de l'assistant.
+ * Pipeline RÉELLE (API + worker + MockAiProvider déterministe) — le mock ne
+ * décide que QUEL outil appeler ; la mutation, elle, passe par le vrai cœur.
+ */
+test('l’assistant ajoute au panier depuis la conversation (ligne marquée « Ajouté par l’assistant »)', async ({
+  request,
+}) => {
+  const auth = { Authorization: `Bearer ${ownerToken}` };
+
+  // Un run IA consomme des crédits : achat d'un pack via le paiement MOCK
+  // (le Wallet reste la seule source de vérité des crédits).
+  const packages = await request.get(`${API}/organizations/${orgId}/wallet/packages`, {
+    headers: auth,
+  });
+  const packageId = ((await packages.json()) as { items: Array<{ id: string }> }).items[0].id;
+  const topUp = await request.post(`${API}/organizations/${orgId}/wallet/top-ups`, {
+    headers: auth,
+    data: { creditPackageId: packageId },
+  });
+  expect(topUp.status()).toBe(201);
+  const topUpId = ((await topUp.json()) as { topUp: { id: string } }).topUp.id;
+  const confirmed = await request.post(
+    `${API}/organizations/${orgId}/wallet/top-ups/${topUpId}/mock-confirm`,
+    { headers: auth },
+  );
+  expect(confirmed.status()).toBe(201);
+
+  const config = await request.get(
+    `${API}/organizations/${orgId}/shops/${shopId}/ai/configuration`,
+    { headers: auth },
+  );
+  const { version, cartToolsEnabled } = (await config.json()) as {
+    version: number;
+    cartToolsEnabled: boolean;
+  };
+  // Défaut serveur : les outils panier sont exposés sans rien activer.
+  expect(cartToolsEnabled).toBe(true);
+  const patch = await request.patch(`${API}/organizations/${orgId}/shops/${shopId}/ai/configuration`, {
+    headers: auth,
+    data: { mode: 'SUGGEST_ONLY', provider: 'MOCK', expectedVersion: version },
+  });
+  expect(patch.status()).toBe(200);
+
+  // Nouveau client : conversation vierge, aucun panier existant.
+  await request.post(`${API}/dev/whatsapp/mock/inbound`, {
+    data: {
+      channelId,
+      phone: '+237659300009',
+      displayName: 'Cliente IA',
+      text: `!ai-cart ${robeVariantId}`,
+    },
+  });
+
+  const page = ownerPage;
+  await openCartTab(page);
+
+  // La ligne créée par l'IA apparaît, marquée — et reste modifiable par l'agent.
+  await expect(page.getByTestId('cart-line-ai-badge')).toBeVisible({ timeout: 30000 });
+  await expect(page.getByTestId('cart-line')).toHaveCount(1);
+  await expect(page.getByTestId('line-quantity')).toHaveText('1');
+});
+
 test('bascule de Shop : aucun panier ni conversation de l’autre Shop', async () => {
   const page = ownerPage;
   await page.goto('/conversations');

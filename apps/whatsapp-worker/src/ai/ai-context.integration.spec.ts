@@ -147,3 +147,106 @@ describe('AiContextService — mémoire conversationnelle multi-tours', () => {
     expect(ctx!.messages.map((m) => m.content)).toEqual(['msg 4', 'msg 5', 'msg 6']);
   });
 });
+
+// ------------------------------------------------------------------- CI-G1
+describe('AiContextService — contexte enrichi et borné en tokens (CI-G1)', () => {
+  it('injecte les RÈGLES de la boutique dans le prompt (systemPromptOverride n’est plus mort)', async () => {
+    const anchorId = await addMessage('INBOUND', 'CUSTOMER', 'TEXT', 'Je peux rendre un article ?');
+
+    const ctx = await service.build({
+      organizationId: ids.org,
+      shopId: ids.shop,
+      conversationId: ids.conversation,
+      contextLastMessageId: anchorId,
+      contextMaxMessages: 20,
+      businessRules: 'Aucun retour après 7 jours. Livraison Douala uniquement.',
+      contextTokenBudget: 3000,
+    });
+
+    expect(ctx!.systemPrompt).toContain('Aucun retour après 7 jours.');
+    expect(ctx!.budget.droppedBusinessRules).toBe(false);
+  });
+
+  it('injecte le résumé des HORAIRES (plus besoin d’un tour d’outil pour les réciter)', async () => {
+    await prisma.shopOpeningHour.createMany({
+      data: [
+        { shopId: ids.shop, dayOfWeek: 'MONDAY', opensAtMinutes: 480, closesAtMinutes: 1080 },
+        { shopId: ids.shop, dayOfWeek: 'SATURDAY', opensAtMinutes: 540, closesAtMinutes: 780 },
+      ],
+    });
+    const anchorId = await addMessage('INBOUND', 'CUSTOMER', 'TEXT', 'Vous ouvrez à quelle heure ?');
+
+    const ctx = await service.build({
+      organizationId: ids.org,
+      shopId: ids.shop,
+      conversationId: ids.conversation,
+      contextLastMessageId: anchorId,
+      contextMaxMessages: 20,
+      contextTokenBudget: 3000,
+    });
+
+    expect(ctx!.systemPrompt).toContain('lun 08:00-18:00');
+    expect(ctx!.systemPrompt).toContain('sam 09:00-13:00');
+    // Un jour sans plage est explicitement fermé (jamais deviné par le modèle).
+    expect(ctx!.systemPrompt).toContain('dim fermé');
+
+    await prisma.shopOpeningHour.deleteMany({ where: { shopId: ids.shop } });
+  });
+
+  it('aucun horaire configuré → aucune ligne Horaires (on ne prétend jamais « fermé »)', async () => {
+    const anchorId = await addMessage('INBOUND', 'CUSTOMER', 'TEXT', 'Bonjour');
+
+    const ctx = await service.build({
+      organizationId: ids.org,
+      shopId: ids.shop,
+      conversationId: ids.conversation,
+      contextLastMessageId: anchorId,
+      contextMaxMessages: 20,
+      contextTokenBudget: 3000,
+    });
+
+    expect(ctx!.systemPrompt).not.toContain('Horaires');
+    expect(ctx!.systemPrompt).not.toContain('fermé');
+  });
+
+  it('budget serré : les messages les plus ANCIENS sautent, le déclencheur reste', async () => {
+    const long = 'x'.repeat(400); // ≈ 101 tokens estimés chacun
+    await addMessage('INBOUND', 'CUSTOMER', 'TEXT', `A ${long}`);
+    await addMessage('OUTBOUND', 'AI', 'TEXT', `B ${long}`);
+    const anchorId = await addMessage('INBOUND', 'CUSTOMER', 'TEXT', `C ${long}`);
+
+    const ctx = await service.build({
+      organizationId: ids.org,
+      shopId: ids.shop,
+      conversationId: ids.conversation,
+      contextLastMessageId: anchorId,
+      contextMaxMessages: 20,
+      contextTokenBudget: 230,
+    });
+
+    expect(ctx!.messages).toHaveLength(2);
+    expect(ctx!.messages[0].content.startsWith('B')).toBe(true);
+    expect(ctx!.messages[1].content.startsWith('C')).toBe(true);
+    // La coupe est RAPPORTÉE, jamais silencieuse.
+    expect(ctx!.budget.droppedMessageCount).toBe(1);
+    expect(ctx!.budget.estimatedTokens).toBeGreaterThan(0);
+  });
+
+  it('sans budget (0), le seul garde-fou reste contextMaxMessages', async () => {
+    const long = 'x'.repeat(4000);
+    await addMessage('INBOUND', 'CUSTOMER', 'TEXT', long);
+    const anchorId = await addMessage('INBOUND', 'CUSTOMER', 'TEXT', long);
+
+    const ctx = await service.build({
+      organizationId: ids.org,
+      shopId: ids.shop,
+      conversationId: ids.conversation,
+      contextLastMessageId: anchorId,
+      contextMaxMessages: 20,
+      contextTokenBudget: 0,
+    });
+
+    expect(ctx!.messages).toHaveLength(2);
+    expect(ctx!.budget.droppedMessageCount).toBe(0);
+  });
+});

@@ -6,6 +6,7 @@ import { AiProviderError } from '@whauto/ai';
 import { PrismaClient } from '@whauto/database';
 
 import { AiContextService } from './ai-context.service';
+import { AiSummaryService } from './ai-summary.service';
 import { AiOrchestratorService } from './ai-orchestrator.service';
 import { AiOutboundSenderService } from './ai-outbound-sender.service';
 import type { AiProviderFactory } from './ai-provider.factory';
@@ -33,6 +34,9 @@ const envVars: Record<string, unknown> = {
   AI_CONTEXT_MAX_MESSAGES: 20,
   AI_TOOL_MAX_ROUNDS: 4,
   AI_REQUEST_TIMEOUT_MS: 5000,
+  // Ces scénarios testent la BOUCLE de run, pas le résumé (CI-G2) : on le coupe
+  // pour qu'aucun appel fournisseur supplémentaire ne consomme le script.
+  AI_SUMMARY_ENABLED: false,
 };
 const config = { get: (k: string) => envVars[k] } as unknown as ConfigService;
 
@@ -52,6 +56,7 @@ const scripted: AiProvider = {
   generateSuggestion: async () => nextStep(),
   continueWithToolResults: async () => nextStep(),
   validateConfiguration: async () => ({ ok: true }),
+  summarizeConversation: async () => nextStep(),
 };
 async function nextStep(): Promise<AiProviderResponse> {
   providerCalls += 1;
@@ -74,6 +79,7 @@ const orchestrator = new AiOrchestratorService(
   P,
   config,
   new AiContextService(P),
+  new AiSummaryService(P, config),
   factory,
   new AiToolExecutor(P),
   emitter,

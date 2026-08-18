@@ -58,6 +58,52 @@ export function computeOpenState(ranges: OpeningRange[], now: Date, timeZone: st
   return { isOpenNow, currentDay: day, currentMinutes: minutes };
 }
 
+const DAY_ORDER: DayOfWeek[] = [
+  'MONDAY',
+  'TUESDAY',
+  'WEDNESDAY',
+  'THURSDAY',
+  'FRIDAY',
+  'SATURDAY',
+  'SUNDAY',
+];
+
+const DAY_LABELS: Record<DayOfWeek, string> = {
+  MONDAY: 'lun',
+  TUESDAY: 'mar',
+  WEDNESDAY: 'mer',
+  THURSDAY: 'jeu',
+  FRIDAY: 'ven',
+  SATURDAY: 'sam',
+  SUNDAY: 'dim',
+};
+
+/**
+ * Résumé COMPACT des horaires, injecté directement dans le prompt (CI-G1) :
+ * « lun 08:00-18:00 ; mar 08:00-12:00, 14:00-18:00 ; dim fermé ».
+ *
+ * Pourquoi : sans lui, la moindre question d'horaire coûtait un tour d'outil
+ * complet (un aller-retour Gemini facturé) pour une donnée statique. Le modèle
+ * garde l'outil détaillé pour « êtes-vous ouverts MAINTENANT ? » (qui dépend de
+ * l'heure courante), mais n'en a plus besoin pour réciter les horaires.
+ *
+ * Renvoie `null` si AUCUNE plage n'est configurée : on ne prétend jamais que la
+ * boutique est fermée toute la semaine alors qu'elle n'a rien renseigné.
+ */
+export function buildOpeningHoursSummary(ranges: OpeningRange[]): string | null {
+  if (ranges.length === 0) {
+    return null;
+  }
+  const parts = DAY_ORDER.map((day) => {
+    const dayRanges = ranges
+      .filter((range) => range.dayOfWeek === day)
+      .sort((a, b) => a.opensAtMinutes - b.opensAtMinutes)
+      .map((range) => `${minutesToHhmm(range.opensAtMinutes)}-${minutesToHhmm(range.closesAtMinutes)}`);
+    return `${DAY_LABELS[day]} ${dayRanges.length > 0 ? dayRanges.join(', ') : 'fermé'}`;
+  });
+  return parts.join(' ; ');
+}
+
 /** "HH:mm" depuis des minutes (pour un résumé lisible côté modèle). */
 export function minutesToHhmm(minutes: number): string {
   const h = Math.floor(minutes / 60)

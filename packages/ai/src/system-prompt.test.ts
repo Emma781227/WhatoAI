@@ -49,6 +49,24 @@ describe('buildAiSystemPrompt', () => {
     expect(prompt).toContain('Pas de retour après 7 jours.');
   });
 
+  it('reste en lecture seule quand les outils panier ne sont pas exposés', () => {
+    const prompt = buildAiSystemPrompt({ shopName: 'X' });
+    expect(prompt.toLowerCase()).toContain('lecture seule');
+    expect(prompt).not.toMatch(/tu peux ajouter un article/i);
+  });
+
+  it('autorise et encadre le panier quand les outils WRITE sont exposés', () => {
+    const prompt = buildAiSystemPrompt({ shopName: 'X', cartToolsEnabled: true });
+    expect(prompt.toLowerCase()).toContain('panier');
+    expect(prompt).toMatch(/tu peux ajouter un article/i);
+    // Jamais de son propre chef, jamais de total calculé de tête.
+    expect(prompt).toMatch(/de ta propre initiative/i);
+    expect(prompt).toMatch(/ne calcule jamais un total/i);
+    // Le panier ne déborde jamais sur commande/stock/paiement.
+    expect(prompt).toMatch(/ne modifies JAMAIS une commande, un stock ni un paiement/i);
+    expect(prompt.toLowerCase()).not.toContain('lecture seule');
+  });
+
   it('adapte la consigne de langue quand une préférence est connue', () => {
     expect(buildAiSystemPrompt({ shopName: 'X', preferredLanguage: 'fr' })).toContain('fr');
   });

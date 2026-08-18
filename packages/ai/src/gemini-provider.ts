@@ -12,6 +12,7 @@ import type {
   AiGenerateInput,
   AiProviderName,
   AiProviderResponse,
+  AiSummarizeInput,
   AiToolCall,
   AiToolDefinition,
   AiToolResult,
@@ -129,6 +130,27 @@ export class GeminiAiProvider implements AiProvider {
 
   async continueWithToolResults(input: AiContinueInput): Promise<AiProviderResponse> {
     return this.call(this.buildRequestBody(input, input.previousToolCalls, input.toolResults));
+  }
+
+  /**
+   * Résumé de conversation (CI-G2). Appel volontairement NU : aucun outil
+   * déclaré (le résumé ne doit jamais déclencher une action métier) et aucune
+   * sortie structurée imposée (on attend du texte). Le budget de sortie est
+   * fourni par l'appelant et reste petit — c'est un poste de coût récurrent.
+   */
+  async summarizeConversation(input: AiSummarizeInput): Promise<AiProviderResponse> {
+    const contents: GeminiContent[] = input.messages
+      .filter((message) => message.role !== 'SYSTEM')
+      .map((message) => ({
+        role: message.role === 'CUSTOMER' ? ('user' as const) : ('model' as const),
+        parts: [{ text: message.content }],
+      }));
+
+    return this.call({
+      systemInstruction: { parts: [{ text: input.systemPrompt }] },
+      contents,
+      generationConfig: { maxOutputTokens: input.maxOutputTokens },
+    });
   }
 
   /**

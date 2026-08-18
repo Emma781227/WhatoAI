@@ -8,6 +8,7 @@ import type {
   AiInputMessage,
   AiProviderName,
   AiProviderResponse,
+  AiSummarizeInput,
 } from './types';
 
 /**
@@ -31,6 +32,12 @@ export const MOCK_AI_TRIGGERS = {
   HANDOFF: '!ai-handoff',
   /** Force un appel d'outil au premier tour (test de la boucle). */
   TOOL: '!ai-tool',
+  /**
+   * Force un `add_to_cart` sur la variante donnée : `!ai-cart <variantId>`
+   * (AI-C / W3). Sans effet si l'outil n'est pas exposé au run — c'est
+   * exactement ce que doit prouver le verrou `cartToolsEnabled`.
+   */
+  CART: '!ai-cart',
 } as const;
 
 const HANDOFF_KEYWORDS = ['remboursement', 'annuler', 'annulation', 'réclamation', 'litige'];
@@ -84,6 +91,14 @@ export class MockAiProvider implements AiProvider {
       // Sortie volontairement non structurée : exerce la validation Zod.
       return response({ text: 'je ne suis pas du JSON' });
     }
+    if (text.includes(MOCK_AI_TRIGGERS.CART) && input.tools.some((tool) => tool.name === 'add_to_cart')) {
+      const variantId = text.split(MOCK_AI_TRIGGERS.CART)[1]?.trim().split(/\s+/)[0] ?? '';
+      return response({
+        text: null,
+        finishReason: 'TOOL_CALLS',
+        toolCalls: [{ id: 'mock-cart-1', name: 'add_to_cart', arguments: { variantId, quantity: 1 } }],
+      });
+    }
     if (text.includes(MOCK_AI_TRIGGERS.TOOL) && input.tools.length > 0) {
       return response({
         text: null,
@@ -128,6 +143,23 @@ export class MockAiProvider implements AiProvider {
         usedBusinessData: true,
       }),
     });
+  }
+
+  /**
+   * Résumé MOCK — littéral et déterministe : concatène les messages CLIENT
+   * (bornés), sans rien inventer. Suffit à exercer toute la mécanique CI-G2
+   * (seuils, ancre, réutilisation, budget) sans quota ni réseau.
+   */
+  async summarizeConversation(input: AiSummarizeInput): Promise<AiProviderResponse> {
+    const customerLines = input.messages
+      .filter((message) => message.role === 'CUSTOMER')
+      .map((message) => message.content.trim().slice(0, 80))
+      .filter((content) => content !== '');
+    const parts = [
+      input.previousSummary?.trim() ? `Antérieur : ${input.previousSummary.trim()}` : null,
+      customerLines.length > 0 ? `Demandes client : ${customerLines.join(' | ')}` : 'Aucune demande client.',
+    ].filter((part): part is string => part !== null);
+    return response({ text: parts.join('\n') });
   }
 
   async validateConfiguration(): Promise<AiConfigurationCheck> {

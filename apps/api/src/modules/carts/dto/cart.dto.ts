@@ -265,6 +265,13 @@ export class CartItemResponseDto {
   @ApiPropertyOptional({ nullable: true })
   currentPriceMinor!: number | null;
 
+  /**
+   * Qui a créé la ligne (AI-C / W3) : AI = outil WRITE de l'assistant pendant un
+   * run. Traçabilité/affichage seulement — l'identifiant du run reste interne.
+   */
+  @ApiProperty({ enum: ['HUMAN', 'AI'] })
+  addedBySource!: string;
+
   @ApiProperty()
   version!: number;
 
@@ -288,6 +295,7 @@ export class CartItemResponseDto {
       optionValues: item.optionValuesSnapshot,
       availabilityStatus: item.availabilityStatus,
       currentPriceMinor: item.currentPriceMinor,
+      addedBySource: item.addedBySource,
       version: item.version,
       reservation: item.reservations[0]
         ? {

@@ -18,12 +18,34 @@ export interface AiToolContext {
   aiRunId: string;
 }
 
+/** Événement temps réel qu'un outil demande d'émettre APRÈS commit (générique). */
+export interface AiToolRealtimeEvent {
+  event: string;
+  payload: unknown;
+}
+
 /** Résultat d'un outil, filtré et borné, réinjecté au modèle. */
 export interface AiToolRunResult {
   /** Charge utile JSON-sérialisable, SANS donnée sensible (coût, adresse, note). */
   result: unknown;
   /** Résumé compact persisté dans AiToolCall.resultSummaryFiltered. */
   summary: Record<string, unknown>;
+  /**
+   * Événements temps réel à émettre par l'orchestrateur APRÈS l'exécution (la
+   * transaction de l'outil est déjà committée). Les outils WRITE panier y
+   * placent `cart.updated` — le panneau Panier de l'inbox bouge en direct.
+   */
+  realtimeEvents?: AiToolRealtimeEvent[];
+}
+
+/**
+ * Métadonnées de l'appel courant — position dans la boucle d'outils du run.
+ * Les outils WRITE en dérivent une clé d'idempotence stable
+ * (`ai.<aiRunId>.<round>.<sequence>`) pour dédupliquer un rejeu DANS le run.
+ */
+export interface AiToolCallMeta {
+  round: number;
+  sequence: number;
 }
 
 /**
@@ -39,7 +61,17 @@ export interface AiToolDefinitionEntry<TInput = unknown> {
   parameters: Record<string, unknown>;
   /** Schéma Zod STRICT (validé par l'exécuteur ; ZodDefault → input/output décalés). */
   inputSchema: ZodTypeAny;
-  run(prisma: PrismaService, ctx: AiToolContext, input: TInput): Promise<AiToolRunResult>;
+  /**
+   * Reçoit un contexte déjà scopé. Les outils LECTURE ignorent `meta` ; les
+   * outils WRITE l'utilisent pour l'idempotence. `prisma` est le client de base
+   * — un outil WRITE ouvre sa propre transaction.
+   */
+  run(
+    prisma: PrismaService,
+    ctx: AiToolContext,
+    input: TInput,
+    meta: AiToolCallMeta,
+  ): Promise<AiToolRunResult>;
 }
 
 /** Erreur métier d'un outil (ressource introuvable/hors périmètre) — jamais un leak. */

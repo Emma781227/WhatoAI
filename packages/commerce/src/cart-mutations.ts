@@ -40,6 +40,16 @@ export interface CartVariantForAdd {
   inventory: { quantityOnHand: number; quantityReserved: number } | null;
 }
 
+/**
+ * Origine d'une ligne CRÉÉE (AI-C / W3). Appliquée uniquement à la création :
+ * un incrément de quantité sur une ligne existante ne réécrit JAMAIS l'origine
+ * (la ligne reste attribuée à qui l'a mise dans le panier). Absente = HUMAN.
+ */
+export interface CartItemOrigin {
+  source: 'HUMAN' | 'AI';
+  aiRunId?: string | null;
+}
+
 /** Référence de réservation (ajustement de delta — pas besoin de la quantité). */
 export interface CartReservationRef {
   id: string;
@@ -112,6 +122,8 @@ export async function addItemToCartTx(
     quantity: number;
     expectedVersion?: number;
     clientMutationId?: string;
+    /** Origine de la ligne si elle est créée (défaut HUMAN). */
+    origin?: CartItemOrigin;
   },
   deps: CartMutationDeps,
 ): Promise<{ cartItemId: string }> {
@@ -189,6 +201,8 @@ export async function addItemToCartTx(
         imageUrlSnapshot: variant.product.images[0]?.url ?? null,
         optionValuesSnapshot: optionValues.length > 0 ? optionValues : Prisma.JsonNull,
         currentPriceMinor: variant.priceMinor,
+        addedBySource: params.origin?.source ?? 'HUMAN',
+        addedByAiRunId: params.origin?.aiRunId ?? null,
       },
       select: { id: true },
     });

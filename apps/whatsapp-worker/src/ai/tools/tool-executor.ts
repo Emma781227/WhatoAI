@@ -2,8 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { AiToolCallStatus } from '@whauto/database';
 
 import { PrismaService } from '../../prisma/prisma.service';
+import { AI_CART_TOOL_NAMES } from './cart-tools';
 import { AI_TOOL_REGISTRY } from './tool-registry';
-import { AiToolError, type AiToolContext } from './tool-types';
+import { AiToolError, type AiToolContext, type AiToolRealtimeEvent } from './tool-types';
 
 /** Borne de sérialisation des champs persistés (jamais un dump illimité). */
 const MAX_FILTERED_JSON = 4000;
@@ -12,6 +13,12 @@ export interface AiToolCallRef {
   round: number;
   sequence: number;
   timeoutMs: number;
+  /**
+   * Outils WRITE panier autorisés pour cette Shop (défaut true). Second verrou :
+   * même si un outil panier n'a pas été transmis au modèle, un nom halluciné ou
+   * un registre modifié ne doit JAMAIS pouvoir muter un panier.
+   */
+  cartToolsEnabled?: boolean;
 }
 
 export interface AiToolExecutionOutcome {
@@ -23,6 +30,8 @@ export interface AiToolExecutionOutcome {
   errorCode: string | null;
   latencyMs: number;
   aiToolCallId: string;
+  /** Événements temps réel à émettre par l'orchestrateur (vide sauf succès WRITE). */
+  realtimeEvents: AiToolRealtimeEvent[];
 }
 
 function boundedJson(value: unknown): unknown {
@@ -36,6 +45,7 @@ function boundedJson(value: unknown): unknown {
 /**
  * Exécute UN appel d'outil demandé par le modèle. Barrières, dans l'ordre :
  * 1. outil inconnu → REJECTED (le modèle ne peut appeler que le registre) ;
+ * 1 bis. outil panier alors que la Shop les désactive → REJECTED (TOOL_DISABLED) ;
  * 2. arguments non conformes au schéma STRICT → REJECTED (paramètre inconnu,
  *    type invalide, borne dépassée) ;
  * 3. timeout par outil → FAILED ;
@@ -65,6 +75,11 @@ export class AiToolExecutor {
       return this.recordRejected(ctx, toolName, ref, boundedJson(rawArgs), 'UNKNOWN_TOOL', startedAt);
     }
 
+    // 1 bis. Outil panier alors que la Shop les a désactivés — jamais exécuté.
+    if (AI_CART_TOOL_NAMES.has(toolName) && ref.cartToolsEnabled === false) {
+      return this.recordRejected(ctx, toolName, ref, boundedJson(rawArgs), 'TOOL_DISABLED', startedAt);
+    }
+
     // 2. Validation STRICTE des arguments (trace REJECTED directe).
     const parsed = tool.inputSchema.safeParse(rawArgs);
     if (!parsed.success) {
@@ -90,12 +105,16 @@ export class AiToolExecutor {
 
     try {
       // 4. Exécution bornée par un timeout par outil.
-      const outcome = await this.withTimeout(tool.run(this.prisma, ctx, parsed.data), ref.timeoutMs);
+      const outcome = await this.withTimeout(
+        tool.run(this.prisma, ctx, parsed.data, { round: ref.round, sequence: ref.sequence }),
+        ref.timeoutMs,
+      );
       return this.finalize(call.id, toolName, 'SUCCEEDED', {
         latencyMs: Date.now() - startedAt,
         errorCode: null,
         resultSummaryFiltered: boundedJson(outcome.summary),
         result: outcome.result,
+        realtimeEvents: outcome.realtimeEvents ?? [],
       });
     } catch (error) {
       const errorCode =
@@ -111,6 +130,7 @@ export class AiToolExecutor {
         errorCode,
         resultSummaryFiltered: null,
         result: null,
+        realtimeEvents: [],
       });
     }
   }
@@ -159,6 +179,7 @@ export class AiToolExecutor {
       errorCode,
       latencyMs: Date.now() - startedAt,
       aiToolCallId: call.id,
+      realtimeEvents: [],
     };
   }
 
@@ -166,7 +187,13 @@ export class AiToolExecutor {
     callId: string,
     toolName: string,
     status: AiToolCallStatus,
-    extra: { latencyMs: number; errorCode: string | null; resultSummaryFiltered: unknown; result: unknown },
+    extra: {
+      latencyMs: number;
+      errorCode: string | null;
+      resultSummaryFiltered: unknown;
+      result: unknown;
+      realtimeEvents: AiToolRealtimeEvent[];
+    },
   ): Promise<AiToolExecutionOutcome> {
     await this.prisma.aiToolCall.update({
       where: { id: callId },
@@ -185,6 +212,7 @@ export class AiToolExecutor {
       errorCode: extra.errorCode,
       latencyMs: extra.latencyMs,
       aiToolCallId: callId,
+      realtimeEvents: extra.realtimeEvents,
     };
   }
 }

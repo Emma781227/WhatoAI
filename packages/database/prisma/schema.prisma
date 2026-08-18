@@ -228,6 +228,14 @@ enum CartStatus {
   EXPIRED
 }
 
+// Origine d'une ligne de panier. AI = créée par un outil WRITE de l'assistant
+// pendant un AiRun (AI-C) ; HUMAN = agent ou client via l'API. Sert UNIQUEMENT
+// à la traçabilité/affichage — aucune règle métier ne dépend de cette valeur.
+enum CartItemSource {
+  HUMAN
+  AI
+}
+
 enum StockReservationStatus {
   ACTIVE
   RELEASED
@@ -504,6 +512,7 @@ model Organization {
   aiRuns               AiRun[]
   aiSuggestions        AiSuggestion[]
   aiToolCalls          AiToolCall[]
+  conversationSummaries ConversationSummary[]
   conversationHandoffs ConversationHandoff[]
 
   wallet             Wallet?
@@ -593,6 +602,7 @@ model Shop {
   aiRuns               AiRun[]
   aiSuggestions        AiSuggestion[]
   aiToolCalls          AiToolCall[]
+  conversationSummaries ConversationSummary[]
   conversationHandoffs ConversationHandoff[]
   aiUsageEvents        AiUsageEvent[]
   whatsAppConnections  WhatsAppConnection[]
@@ -887,6 +897,7 @@ model Conversation {
   aiRuns             AiRun[]
   aiSuggestions      AiSuggestion[]
   handoffs           ConversationHandoff[]
+  aiSummary          ConversationSummary?
 
   // Cible de la FK composite des Carts (ajout additif validé — phase panier).
   @@unique([id, shopId])
@@ -958,6 +969,7 @@ model Message {
   aiRunTriggered           AiRun?         @relation("AiRunTriggerMessage")
   aiRunsAsContext          AiRun[]        @relation("AiRunContextMessage")
   aiSuggestionsAsContext   AiSuggestion[] @relation("AiSuggestionContextMessage")
+  aiSummariesAnchored      ConversationSummary[] @relation("ConversationSummaryAnchor")
   aiSuggestionsAsSent      AiSuggestion[] @relation("AiSuggestionSentMessage")
   aiGeneratedByRun         AiRun?         @relation("AiRunAutoReplyMessage", fields: [aiGeneratedByRunId], references: [id], onDelete: SetNull)
 
@@ -1538,11 +1550,18 @@ model CartItem {
   optionValuesSnapshot Json? // [["Taille","M"],["Couleur","Rouge"]] borné
   availabilityStatus   String   @default("VALID")
   currentPriceMinor    Int? // prix catalogue à la dernière revalidation (affichage de l'écart)
+  // Origine de la LIGNE (AI-C / W3) : qui l'a créée. Un changement de quantité
+  // ultérieur ne réécrit JAMAIS cette origine — c'est la création qui compte.
+  // `addedByAiRunId` trace le run exact (SetNull : purger un run ne supprime
+  // jamais une ligne de panier).
+  addedBySource        CartItemSource @default(HUMAN)
+  addedByAiRunId       String?
   version              Int      @default(0)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
   organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  addedByAiRun AiRun?             @relation("AiRunCartItem", fields: [addedByAiRunId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   cart         Cart               @relation(fields: [cartId, shopId], references: [id, shopId], onDelete: Cascade)
   product      Product            @relation(fields: [productId, shopId], references: [id, shopId], onDelete: NoAction, onUpdate: NoAction)
   variant      ProductVariant     @relation(fields: [variantId, productId], references: [id, productId], onDelete: NoAction, onUpdate: NoAction)
@@ -1983,6 +2002,12 @@ model AiConfiguration {
   // activables uniquement par OWNER/ADMIN (sous-phase C).
   autoReplyEnabled    Boolean        @default(false)
   humanHandoffEnabled Boolean        @default(true)
+  // Outils WRITE panier (AI-C / W3). Activé par défaut : le panier est
+  // RÉVERSIBLE, visible dans l'inbox et corrigeable par un agent, et l'IA ne
+  // tourne déjà que si le commerçant a choisi un mode. Le drapeau reste une
+  // sortie de secours — false retire les outils du registre transmis au modèle
+  // ET les refuse à l'exécution (deux verrous, jamais le prompt seul).
+  cartToolsEnabled    Boolean        @default(true)
   // Garde-fous AUTO_REPLY (sous-phase C — aucun effet tant que le mode/le
   // drapeau ne sont pas actifs). Le schedule pilote D4 (24/7 vs hors-horaires) ;
   // le plafond borne le nombre de réponses auto par conversation et par jour
@@ -2066,6 +2091,8 @@ model AiRun {
   toolCalls      AiToolCall[]
   handoffs       ConversationHandoff[]
   autoReplyMessages Message[]    @relation("AiRunAutoReplyMessage")
+  cartItemsAdded CartItem[]      @relation("AiRunCartItem")
+  conversationSummaries ConversationSummary[] @relation("AiRunConversationSummary")
   usageEvent     AiUsageEvent?
 
   @@index([organizationId, shopId, status])
@@ -2145,6 +2172,53 @@ model AiToolCall {
   @@index([aiRunId, round])
   @@index([organizationId, shopId, toolName])
   @@map("ai_tool_calls")
+}
+
+// Résumé ROULANT d'une conversation (CI-G2). Une conversation longue coûte cher
+// et perd ses faits clés dès que la fenêtre de contexte glisse : le résumé
+// remplace l'historique ANCIEN (jamais les messages récents, qui restent bruts).
+//
+// `coveredThroughMessageId` est l'ANCRE : le résumé ne décrit QUE les messages
+// jusqu'à ce point. Il n'est donc jamais « périmé » au sens faux — il est
+// simplement incomplet, et le worker le régénère quand trop de messages se sont
+// accumulés au-delà de l'ancre. Un seul résumé vivant par conversation.
+//
+// Contenu : texte libre BORNÉ produit par le modèle. Jamais de note interne, de
+// coût, de secret ni de donnée d'une autre conversation — le générateur reçoit
+// exactement le même contexte filtré que le run normal.
+model ConversationSummary {
+  id             String @id @default(cuid())
+  organizationId String
+  shopId         String
+  conversationId String @unique
+
+  content                 String
+  coveredThroughMessageId String
+  /// Nombre de messages effectivement résumés (sert au seuil de régénération).
+  coveredMessageCount     Int    @default(0)
+
+  /// Traçabilité de génération — jamais le prompt complet, jamais de secret.
+  provider           AiProviderType
+  model              String
+  promptVersion      String?
+  generatedByAiRunId String?
+
+  version   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shop                  Shop         @relation(fields: [shopId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  conversation          Conversation @relation(fields: [conversationId, shopId], references: [id, shopId], onDelete: Cascade)
+  coveredThroughMessage Message      @relation("ConversationSummaryAnchor", fields: [coveredThroughMessageId], references: [id], onDelete: Cascade)
+  generatedByAiRun      AiRun?       @relation("AiRunConversationSummary", fields: [generatedByAiRunId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  // `conversationId @unique` impose UN résumé vivant par conversation ; ce
+  // @@unique est exigé par Prisma comme côté défini de la relation 1-1 via la
+  // FK composite (même contrainte que AiConfiguration).
+  @@unique([conversationId, shopId])
+  @@index([organizationId, shopId])
+  @@map("conversation_summaries")
 }
 
 // Source de vérité du transfert vers un humain (ajustement 8 validé) : la

@@ -51,6 +51,7 @@ export class AiConfigurationService {
     if (dto.contextMaxMessages !== undefined) data.contextMaxMessages = dto.contextMaxMessages;
     if (dto.toolMaxRounds !== undefined) data.toolMaxRounds = dto.toolMaxRounds;
     if (dto.humanHandoffEnabled !== undefined) data.humanHandoffEnabled = dto.humanHandoffEnabled;
+    if (dto.cartToolsEnabled !== undefined) data.cartToolsEnabled = dto.cartToolsEnabled;
     if (dto.autoReplyEnabled !== undefined) data.autoReplyEnabled = dto.autoReplyEnabled;
     if (dto.autoReplyScheduleMode !== undefined) data.autoReplyScheduleMode = dto.autoReplyScheduleMode;
     if (dto.autoReplyMaxPerConversationPerDay !== undefined)

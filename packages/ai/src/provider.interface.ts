@@ -4,6 +4,7 @@ import type {
   AiGenerateInput,
   AiProviderName,
   AiProviderResponse,
+  AiSummarizeInput,
 } from './types';
 
 /**
@@ -22,6 +23,14 @@ export interface AiProvider {
 
   /** Tour suivant : mêmes entrées + résultats des outils exécutés par le worker. */
   continueWithToolResults(input: AiContinueInput): Promise<AiProviderResponse>;
+
+  /**
+   * Résumé roulant d'une conversation (CI-G2). Appel SÉPARÉ et facturé : aucun
+   * outil n'est exposé et aucune sortie structurée n'est imposée — le résumé
+   * est du texte, il ne décide de rien. Son usage (tokens) remonte dans
+   * `AiProviderResponse.usage`, donc dans la consommation du run porteur.
+   */
+  summarizeConversation(input: AiSummarizeInput): Promise<AiProviderResponse>;
 
   /**
    * Vérification de configuration — appel de LECTURE uniquement, jamais une

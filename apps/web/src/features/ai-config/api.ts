@@ -21,6 +21,8 @@ export interface AiConfiguration {
   autoReplyMaxPerConversationPerDay: number;
   autoReplyAllowedCategories: string[];
   humanHandoffEnabled: boolean;
+  /** Outils WRITE panier de l'assistant (activés par défaut côté serveur). */
+  cartToolsEnabled: boolean;
   version: number;
 }
 
@@ -31,6 +33,7 @@ export interface UpdateAiConfigurationInput {
   autoReplyMaxPerConversationPerDay?: number;
   autoReplyAllowedCategories?: string[];
   humanHandoffEnabled?: boolean;
+  cartToolsEnabled?: boolean;
   expectedVersion: number;
 }
 

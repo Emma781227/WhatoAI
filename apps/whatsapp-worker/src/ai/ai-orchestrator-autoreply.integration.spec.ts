@@ -5,6 +5,7 @@ import type { AiProvider, AiProviderResponse } from '@whauto/ai';
 import { PrismaClient } from '@whauto/database';
 
 import { AiContextService } from './ai-context.service';
+import { AiSummaryService } from './ai-summary.service';
 import { AiOrchestratorService } from './ai-orchestrator.service';
 import { AiOutboundSenderService } from './ai-outbound-sender.service';
 import type { AiProviderFactory } from './ai-provider.factory';
@@ -39,6 +40,9 @@ const envVars: Record<string, unknown> = {
   AI_CONTEXT_MAX_MESSAGES: 20,
   AI_TOOL_MAX_ROUNDS: 4,
   AI_REQUEST_TIMEOUT_MS: 5000,
+  // Scénarios d'AUTO_REPLY : le résumé (CI-G2) est coupé pour ne pas consommer
+  // le script de réponses du provider.
+  AI_SUMMARY_ENABLED: false,
 };
 const config = { get: (k: string) => envVars[k] } as unknown as ConfigService;
 
@@ -63,6 +67,7 @@ const scripted: AiProvider = {
   generateSuggestion: async () => script[scriptIndex++],
   continueWithToolResults: async () => script[scriptIndex++],
   validateConfiguration: async () => ({ ok: true }),
+  summarizeConversation: async () => script[scriptIndex++],
 };
 const factory = { getProvider: () => scripted } as unknown as AiProviderFactory;
 
@@ -71,6 +76,7 @@ const orchestrator = new AiOrchestratorService(
   P,
   config,
   new AiContextService(P),
+  new AiSummaryService(P, config),
   factory,
   new AiToolExecutor(P),
   emitter,

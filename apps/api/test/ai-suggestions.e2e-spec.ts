@@ -513,6 +513,31 @@ describe('IA — suggestions (e2e)', () => {
       .send({ mode: 'SUGGEST_ONLY', autoReplyEnabled: false, expectedVersion: patch.body.version });
   });
 
+  it('outils panier de l’assistant : activés par défaut, coupables sans toucher au mode (W3)', async () => {
+    const initial = await request(server).get(configUrl()).set(authOwner());
+    expect(initial.status).toBe(200);
+    // Défaut validé : le panier est réversible et corrigeable par un agent.
+    expect(initial.body.cartToolsEnabled).toBe(true);
+
+    const off = await request(server)
+      .patch(configUrl())
+      .set(authOwner())
+      .send({ cartToolsEnabled: false, expectedVersion: initial.body.version });
+    expect(off.status).toBe(200);
+    expect(off.body.cartToolsEnabled).toBe(false);
+    // Couper le panier ne touche NI le mode NI l'auto-réponse.
+    expect(off.body.mode).toBe(initial.body.mode);
+    expect(off.body.autoReplyEnabled).toBe(initial.body.autoReplyEnabled);
+
+    // Réactivation (restaure l'état par défaut pour les tests suivants).
+    const on = await request(server)
+      .patch(configUrl())
+      .set(authOwner())
+      .send({ cartToolsEnabled: true, expectedVersion: off.body.version });
+    expect(on.status).toBe(200);
+    expect(on.body.cartToolsEnabled).toBe(true);
+  });
+
   // -------------------------------------------------- C4 : pause / reprise
 
   const autoReplyBase = (conv: string) =>

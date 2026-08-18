@@ -1,6 +1,7 @@
 import { computeQuantityAvailable, computeVariantStockStatus } from '@whauto/shared';
 import { z } from 'zod';
 
+import { AI_CART_TOOL_NAMES, AI_CART_WRITE_TOOLS } from './cart-tools';
 import { computeOpenState, minutesToHhmm, type OpeningRange } from './opening-hours';
 import { AiToolError, type AiToolDefinitionEntry, type AiToolRunResult } from './tool-types';
 
@@ -475,13 +476,26 @@ export const AI_TOOL_REGISTRY: Record<string, AiToolDefinitionEntry> = {
   [getShopOpeningHours.name]: getShopOpeningHours as AiToolDefinitionEntry,
   [getOrderStatus.name]: getOrderStatus as AiToolDefinitionEntry,
   [requestHumanHandoff.name]: requestHumanHandoff as AiToolDefinitionEntry,
+  // Outils WRITE panier (AI-C) — l'IA construit le panier conversationnellement.
+  ...AI_CART_WRITE_TOOLS,
 };
 
-/** Définitions transmises au modèle (function declarations) — lecture seule + handoff. */
-export function aiToolDefinitions(): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
-  return Object.values(AI_TOOL_REGISTRY).map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-  }));
+/**
+ * Définitions transmises au modèle (function declarations) : lecture + handoff,
+ * plus les outils WRITE panier si la Shop les autorise
+ * (`AiConfiguration.cartToolsEnabled`). Un outil non transmis ne peut pas être
+ * choisi par le modèle ; l'exécuteur pose le second verrou (défense en
+ * profondeur — un modèle peut halluciner un nom d'outil).
+ */
+export function aiToolDefinitions(opts?: {
+  cartToolsEnabled?: boolean;
+}): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
+  const cartToolsEnabled = opts?.cartToolsEnabled ?? true;
+  return Object.values(AI_TOOL_REGISTRY)
+    .filter((tool) => cartToolsEnabled || !AI_CART_TOOL_NAMES.has(tool.name))
+    .map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    }));
 }

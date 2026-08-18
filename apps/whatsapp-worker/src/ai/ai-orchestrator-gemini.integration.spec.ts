@@ -7,6 +7,7 @@ import { GeminiAiProvider } from '@whauto/ai';
 import { PrismaClient } from '@whauto/database';
 
 import { AiContextService } from './ai-context.service';
+import { AiSummaryService } from './ai-summary.service';
 import { AiOrchestratorService } from './ai-orchestrator.service';
 import { AiOutboundSenderService } from './ai-outbound-sender.service';
 import type { AiProviderFactory } from './ai-provider.factory';
@@ -108,6 +109,8 @@ const envVars: Record<string, unknown> = {
   AI_CONTEXT_MAX_MESSAGES: 20,
   AI_TOOL_MAX_ROUNDS: 4,
   AI_REQUEST_TIMEOUT_MS: 5000,
+  // Faux serveur Gemini scripté : le résumé (CI-G2) est coupé ici.
+  AI_SUMMARY_ENABLED: false,
 };
 const config = { get: (k: string) => envVars[k] } as unknown as ConfigService;
 const emitter = { emitToOrganization: () => undefined } as unknown as AiRealtimeEmitter;
@@ -119,7 +122,7 @@ const outboundSender = new AiOutboundSenderService(
   emitter,
   { add: async () => undefined } as unknown as ConstructorParameters<typeof AiOutboundSenderService>[2],
 );
-const orchestrator = new AiOrchestratorService(P, config, new AiContextService(P), factory, new AiToolExecutor(P), emitter, outboundSender, new WalletReservationService(P));
+const orchestrator = new AiOrchestratorService(P, config, new AiContextService(P), new AiSummaryService(P, config), factory, new AiToolExecutor(P), emitter, outboundSender, new WalletReservationService(P));
 
 const ids: Record<string, string> = {};
 const SUFFIX = `aigem-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;

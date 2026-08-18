@@ -85,8 +85,12 @@ function AiConfigForm({ shopId, config }: { shopId: string; config: AiConfigurat
   const [scheduleMode, setScheduleMode] = useState<AiScheduleMode>(config.autoReplyScheduleMode);
   const [maxPerDay, setMaxPerDay] = useState(String(config.autoReplyMaxPerConversationPerDay));
   const [categories, setCategories] = useState<string[]>(config.autoReplyAllowedCategories);
+  const [cartToolsEnabled, setCartToolsEnabled] = useState(config.cartToolsEnabled);
 
   const showAutoReplySettings = mode === 'AUTO_REPLY';
+  // Le panier vaut pour SUGGEST_ONLY comme pour AUTO_REPLY (l'IA agit pendant
+  // le run, seule la RÉPONSE dépend du mode) — donc visible dès que l'IA tourne.
+  const showCartTools = mode !== 'DISABLED';
 
   const toggleCategory = (cat: string) => {
     setCategories((prev) => (prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]));
@@ -101,6 +105,7 @@ function AiConfigForm({ shopId, config }: { shopId: string; config: AiConfigurat
         autoReplyScheduleMode: scheduleMode,
         autoReplyMaxPerConversationPerDay: Number.isFinite(parsedMax) ? parsedMax : 5,
         autoReplyAllowedCategories: categories,
+        cartToolsEnabled,
         expectedVersion: config.version,
       },
       {
@@ -144,6 +149,26 @@ function AiConfigForm({ shopId, config }: { shopId: string; config: AiConfigurat
             </SelectContent>
           </Select>
         </div>
+
+        {showCartTools ? (
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <Label htmlFor="ai-cart-tools">Gestion du panier par l’assistant</Label>
+              <p className="text-xs text-muted-foreground">
+                L’IA peut ajouter, modifier ou retirer des articles du panier du client pendant la
+                conversation. Le panier reste visible et corrigeable par votre équipe ; la commande
+                et le paiement ne sont jamais validés par l’IA.
+              </p>
+            </div>
+            <Switch
+              id="ai-cart-tools"
+              data-testid="ai-cart-tools"
+              checked={cartToolsEnabled}
+              onCheckedChange={setCartToolsEnabled}
+              disabled={!canConfigure}
+            />
+          </div>
+        ) : null}
 
         {showAutoReplySettings ? (
           <div className="space-y-5 rounded-card border border-[#7C3AED]/20 bg-[#7C3AED]/5 p-4 dark:bg-[#7C3AED]/10">

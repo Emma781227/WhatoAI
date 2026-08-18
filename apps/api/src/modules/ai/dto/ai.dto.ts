@@ -73,6 +73,16 @@ export class UpdateAiConfigurationDto {
   @IsBoolean()
   humanHandoffEnabled?: boolean;
 
+  /**
+   * Outils WRITE panier de l'assistant (AI-C / W3). Activé par défaut : le
+   * panier est réversible et corrigeable par un agent. false = l'assistant
+   * redevient strictement en lecture (prompt ET outils).
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  cartToolsEnabled?: boolean;
+
   /** Activation AUTO_REPLY — exige la permission ai.enableAutoReply (voir service). */
   @ApiPropertyOptional()
   @IsOptional()
@@ -166,6 +176,7 @@ export class AiConfigurationResponseDto {
   @ApiProperty() autoReplyMaxPerConversationPerDay!: number;
   @ApiProperty({ type: [String] }) autoReplyAllowedCategories!: string[];
   @ApiProperty() humanHandoffEnabled!: boolean;
+  @ApiProperty() cartToolsEnabled!: boolean;
   @ApiProperty() version!: number;
 }
 

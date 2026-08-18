@@ -7,6 +7,7 @@ import {
   PackagePlus,
   Plus,
   ShoppingCart,
+  Sparkles,
   Timer,
   Trash2,
 } from 'lucide-react';
@@ -89,6 +90,18 @@ function CartLine({
           <p className="truncate text-sm font-medium">{item.productName}</p>
           {item.variantName ? (
             <p className="truncate text-xs text-muted-foreground">{item.variantName}</p>
+          ) : null}
+          {item.addedBySource === 'AI' ? (
+            // Ligne créée par l'assistant pendant une conversation (violet IA
+            // réservé). L'agent voit d'un coup d'œil ce qu'il n'a pas ajouté
+            // lui-même — la ligne reste modifiable/supprimable normalement.
+            <span
+              data-testid="cart-line-ai-badge"
+              className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-[#7C3AED]/10 px-1.5 py-0.5 text-[10px] font-medium text-[#7C3AED]"
+            >
+              <Sparkles aria-hidden className="h-2.5 w-2.5" />
+              Ajouté par l’assistant
+            </span>
           ) : null}
           <p className="text-xs text-muted-foreground">
             {formatMinorAmount(item.unitPriceMinor, cart.currency)} / unité

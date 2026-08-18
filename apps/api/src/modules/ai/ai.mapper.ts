@@ -36,6 +36,7 @@ interface ConfigurationRow {
   autoReplyMaxPerConversationPerDay: number;
   autoReplyAllowedCategories: string[];
   humanHandoffEnabled: boolean;
+  cartToolsEnabled: boolean;
   version: number;
 }
 
@@ -53,6 +54,7 @@ export function toConfigurationResponse(row: ConfigurationRow): AiConfigurationR
     autoReplyMaxPerConversationPerDay: row.autoReplyMaxPerConversationPerDay,
     autoReplyAllowedCategories: row.autoReplyAllowedCategories,
     humanHandoffEnabled: row.humanHandoffEnabled,
+    cartToolsEnabled: row.cartToolsEnabled,
     version: row.version,
   };
 }

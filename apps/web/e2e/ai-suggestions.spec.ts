@@ -68,6 +68,24 @@ async function sendInbound(request: APIRequestContext, phone: string, text: stri
   });
 }
 
+/** Achète un pack de crédits (paiement MOCK) — un run IA sans solde est SKIPPED. */
+async function buyCredits(request: APIRequestContext, auth: Record<string, string>) {
+  const packages = await request.get(`${API}/organizations/${orgId}/wallet/packages`, {
+    headers: auth,
+  });
+  const creditPackageId = ((await packages.json()) as { items: Array<{ id: string }> }).items[0].id;
+  const topUp = await request.post(`${API}/organizations/${orgId}/wallet/top-ups`, {
+    headers: auth,
+    data: { creditPackageId },
+  });
+  const topUpId = ((await topUp.json()) as { topUp: { id: string } }).topUp.id;
+  const confirmed = await request.post(
+    `${API}/organizations/${orgId}/wallet/top-ups/${topUpId}/mock-confirm`,
+    { headers: auth },
+  );
+  expect(confirmed.status()).toBe(201);
+}
+
 test.beforeAll(async ({ browser, request }) => {
   test.skip(!existsSync(WORKER_DIST), 'Worker non buildé');
 
@@ -103,6 +121,11 @@ test.beforeAll(async ({ browser, request }) => {
     { headers: auth, data: { displayName: 'AI WA', phoneNumber: '+237659700001' } },
   );
   channelId = ((await chanRes.json()) as { id: string }).id;
+
+  // Crédits : un run IA en réserve et en consomme (module Wallet) — sans solde
+  // le run est SKIPPED avec INSUFFICIENT_CREDITS et aucune suggestion n'existe.
+  // Achat d'un pack via le paiement MOCK, comme un vrai commerçant.
+  await buyCredits(request, auth);
 
   // IA en SUGGEST_ONLY (sinon la config créée par défaut est DISABLED et le
   // worker ne génère rien).

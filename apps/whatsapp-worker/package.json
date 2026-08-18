@@ -17,6 +17,7 @@
     "@nestjs/schedule": "^5.0.1",
     "@socket.io/redis-emitter": "^5.1.0",
     "@whauto/ai": "workspace:*",
+    "@whauto/commerce": "workspace:*",
     "@whauto/config": "workspace:*",
     "@whauto/crypto": "workspace:*",
     "@whauto/database": "workspace:*",

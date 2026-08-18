@@ -121,6 +121,20 @@ export interface AiContinueInput extends AiGenerateInput {
   toolResults: AiToolResult[];
 }
 
+/**
+ * Entrée d'une génération de RÉSUMÉ de conversation (CI-G2). Volontairement
+ * distincte d'`AiGenerateInput` : aucun outil, aucune sortie structurée, un
+ * budget de sortie réduit — un résumé n'est pas une réponse au client et ne doit
+ * jamais pouvoir déclencher un appel d'outil ni une action métier.
+ */
+export interface AiSummarizeInput {
+  systemPrompt: string;
+  messages: AiInputMessage[];
+  /** Résumé précédent, à mettre à jour plutôt qu'à réécrire de zéro. */
+  previousSummary?: string | null;
+  maxOutputTokens: number;
+}
+
 export interface AiConfigurationCheck {
   ok: boolean;
   model?: string;

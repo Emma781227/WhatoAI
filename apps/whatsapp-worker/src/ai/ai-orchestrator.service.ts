@@ -21,6 +21,7 @@ import {
   type AutoReplySuppressionReason,
 } from './ai-auto-reply-policy';
 import { AiContextService, type AiGenerationContext } from './ai-context.service';
+import { AiSummaryService } from './ai-summary.service';
 import { AiOutboundSenderService } from './ai-outbound-sender.service';
 import { AiProviderFactory } from './ai-provider.factory';
 import { AiRealtimeEmitter } from './ai-realtime-emitter.service';
@@ -74,6 +75,7 @@ export class AiOrchestratorService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly contextService: AiContextService,
+    private readonly summaryService: AiSummaryService,
     private readonly providerFactory: AiProviderFactory,
     private readonly toolExecutor: AiToolExecutor,
     private readonly realtime: AiRealtimeEmitter,
@@ -128,7 +130,13 @@ export class AiOrchestratorService {
   private async generate(run: RunRow): Promise<void> {
     const config = await this.prisma.aiConfiguration.findUnique({
       where: { shopId: run.shopId },
-      select: { maxOutputTokens: true, contextMaxMessages: true, toolMaxRounds: true },
+      select: {
+        maxOutputTokens: true,
+        contextMaxMessages: true,
+        toolMaxRounds: true,
+        cartToolsEnabled: true,
+        systemPromptOverride: true,
+      },
     });
     const maxOutputTokens =
       config?.maxOutputTokens ?? this.configService.get<number>('AI_MAX_OUTPUT_TOKENS') ?? 300;
@@ -137,18 +145,10 @@ export class AiOrchestratorService {
     const toolMaxRounds =
       config?.toolMaxRounds ?? this.configService.get<number>('AI_TOOL_MAX_ROUNDS') ?? 4;
     const toolTimeoutMs = this.configService.get<number>('AI_REQUEST_TIMEOUT_MS') ?? 30000;
-
-    const context = await this.contextService.build({
-      organizationId: run.organizationId,
-      shopId: run.shopId,
-      conversationId: run.conversationId,
-      contextLastMessageId: run.contextLastMessageId,
-      contextMaxMessages,
-    });
-    if (!context) {
-      await this.finalizeFailed(run, 'AI_CONTEXT_MISSING');
-      return;
-    }
+    // Outils WRITE panier (AI-C / W3) : activés par défaut, coupables par Shop.
+    // La MÊME valeur pilote le prompt, les définitions transmises au modèle et
+    // le verrou d'exécution — les trois ne peuvent pas diverger.
+    const cartToolsEnabled = config?.cartToolsEnabled ?? true;
 
     const provider = this.providerFactory.getProvider(run.provider, run.model);
     const usage: UsageAccumulator = {
@@ -160,6 +160,42 @@ export class AiOrchestratorService {
       toolRounds: 0,
       resolvedModel: null,
     };
+
+    // Résumé roulant (CI-G2) AVANT l'assemblage : sur une conversation longue,
+    // il remplace l'historique ancien plutôt que de s'y ajouter. L'appel n'a
+    // lieu que si les seuils sont franchis ; ses tokens sont comptés dans
+    // l'usage de CE run (donc facturés au même endroit que le reste).
+    const summary = await this.summaryService.ensureSummary({
+      organizationId: run.organizationId,
+      shopId: run.shopId,
+      conversationId: run.conversationId,
+      contextLastMessageId: run.contextLastMessageId,
+      provider,
+      providerName: run.provider,
+      model: run.model,
+      aiRunId: run.id,
+    });
+    if (summary.response) {
+      this.accumulate(usage, summary.response);
+    }
+
+    const context = await this.contextService.build({
+      organizationId: run.organizationId,
+      shopId: run.shopId,
+      conversationId: run.conversationId,
+      contextLastMessageId: run.contextLastMessageId,
+      contextMaxMessages,
+      cartToolsEnabled,
+      // Règles de la boutique : COMPLÉMENT borné du prompt, jamais un
+      // remplacement (les règles de sécurité restent inconditionnelles).
+      businessRules: config?.systemPromptOverride ?? null,
+      conversationSummary: summary.content,
+      contextTokenBudget: this.configService.get<number>('AI_CONTEXT_TOKEN_BUDGET') ?? 3000,
+    });
+    if (!context) {
+      await this.finalizeFailed(run, 'AI_CONTEXT_MISSING');
+      return;
+    }
 
     const toolCtx: AiToolContext = {
       organizationId: run.organizationId,
@@ -174,6 +210,7 @@ export class AiOrchestratorService {
       toolMaxRounds,
       toolTimeoutMs,
       toolCtx,
+      cartToolsEnabled,
       usage,
     });
     usage.toolRounds = loop.toolRounds;
@@ -200,6 +237,7 @@ export class AiOrchestratorService {
       toolMaxRounds: number;
       toolTimeoutMs: number;
       toolCtx: AiToolContext;
+      cartToolsEnabled: boolean;
       usage: UsageAccumulator;
     },
   ): Promise<{
@@ -209,7 +247,7 @@ export class AiOrchestratorService {
     roundsExceeded: boolean;
     usedToolNames: string[];
   }> {
-    const tools = aiToolDefinitions();
+    const tools = aiToolDefinitions({ cartToolsEnabled: opts.cartToolsEnabled });
     // Noms d'outils réellement appelés — base DÉTERMINISTE de la liste blanche
     // d'auto-envoi (C2). Ordre d'exécution conservé, doublons possibles.
     const usedToolNames: string[] = [];
@@ -239,7 +277,13 @@ export class AiOrchestratorService {
           round: toolRounds,
           sequence: sequence++,
           timeoutMs: opts.toolTimeoutMs,
+          cartToolsEnabled: opts.cartToolsEnabled,
         });
+        // Temps réel APRÈS commit de l'outil : le panneau Panier bouge en direct
+        // quand l'IA agit (ex. cart.updated). Best-effort — n'affecte pas le run.
+        for (const ev of outcome.realtimeEvents) {
+          this.realtime.emitToOrganization(run.organizationId, ev.event, ev.payload);
+        }
         toolResults.push({ id: call.id, name: call.name, result: outcome.result, isError: outcome.isError });
       }
       await this.transitionActive(run.id, 'RUNNING');

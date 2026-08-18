@@ -57,6 +57,25 @@ describe('MockAiProvider', () => {
     expect(result.text).toBeNull();
   });
 
+  it('demande add_to_cart avec la variante donnée quand l’outil est exposé', async () => {
+    const cartTools = [
+      ...TOOLS,
+      { name: 'add_to_cart', description: 'Ajoute au panier', parameters: { type: 'object' } },
+    ];
+    const result = await provider.generateSuggestion(
+      input(`${MOCK_AI_TRIGGERS.CART} var_123`, { tools: cartTools }),
+    );
+    expect(result.finishReason).toBe('TOOL_CALLS');
+    expect(result.toolCalls[0].name).toBe('add_to_cart');
+    expect(result.toolCalls[0].arguments).toEqual({ variantId: 'var_123', quantity: 1 });
+  });
+
+  it('ne demande JAMAIS le panier si l’outil n’est pas exposé (verrou cartToolsEnabled)', async () => {
+    const result = await provider.generateSuggestion(input(`${MOCK_AI_TRIGGERS.CART} var_123`));
+    expect(result.toolCalls).toHaveLength(0);
+    expect(result.finishReason).toBe('STOP');
+  });
+
   it('ne demande jamais d’outil si aucun n’est déclaré', async () => {
     const result = await provider.generateSuggestion(
       input(`${MOCK_AI_TRIGGERS.TOOL} robe`, { tools: [] }),

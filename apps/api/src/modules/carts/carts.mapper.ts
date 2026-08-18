@@ -26,6 +26,9 @@ export const CART_ITEM_SELECT = {
   optionValuesSnapshot: true,
   availabilityStatus: true,
   currentPriceMinor: true,
+  // Origine de la ligne (AI-C / W3) : l'agent doit voir ce que l'assistant a
+  // mis dans le panier. `addedByAiRunId` reste interne (jamais exposé au DTO).
+  addedBySource: true,
   version: true,
   createdAt: true,
   updatedAt: true,
