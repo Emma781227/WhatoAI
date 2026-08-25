@@ -109,6 +109,7 @@ describe('MetaCloudWhatsAppProvider.parseInboundEvent — messages', () => {
         displayName: 'Awa',
         messageType: 'TEXT',
         text: 'Bonjour',
+        media: null,
         providerTimestamp: '2025-06-15T15:06:40.000Z',
       },
     ]);
@@ -133,6 +134,83 @@ describe('MetaCloudWhatsAppProvider.parseInboundEvent — messages', () => {
       });
       expect(events[0]).toMatchObject({ messageType: expected, text: null });
     }
+  });
+
+  it('capture l’identifiant du média — sans lui le fichier est perdu à jamais', () => {
+    const events = provider().parseInboundEvent({
+      body: messageWebhook({
+        type: 'image',
+        text: undefined,
+        image: {
+          id: 'MEDIA_42',
+          mime_type: 'image/jpeg',
+          sha256: 'abc123',
+          file_size: 204_800,
+        },
+      }),
+    });
+
+    expect(events[0]).toMatchObject({
+      messageType: 'IMAGE',
+      media: {
+        externalMediaId: 'MEDIA_42',
+        mimeType: 'image/jpeg',
+        sha256: 'abc123',
+        sizeBytes: 204_800,
+        fileName: null,
+        voice: false,
+      },
+    });
+  });
+
+  it('la LÉGENDE d’un média devient le texte du message (c’est la question du client)', () => {
+    const events = provider().parseInboundEvent({
+      body: messageWebhook({
+        type: 'image',
+        text: undefined,
+        image: { id: 'MEDIA_43', mime_type: 'image/jpeg', caption: '  Vous avez ça en 42 ?  ' },
+      }),
+    });
+
+    expect(events[0]).toMatchObject({ messageType: 'IMAGE', text: 'Vous avez ça en 42 ?' });
+  });
+
+  it('document : nom de fichier conservé ; note vocale : marquée comme telle', () => {
+    const doc = provider().parseInboundEvent({
+      body: messageWebhook({
+        type: 'document',
+        text: undefined,
+        document: { id: 'DOC_1', filename: 'bon-de-commande.pdf', mime_type: 'application/pdf' },
+      }),
+    });
+    expect(doc[0]).toMatchObject({
+      messageType: 'DOCUMENT',
+      media: { fileName: 'bon-de-commande.pdf', voice: false },
+    });
+
+    const voice = provider().parseInboundEvent({
+      body: messageWebhook({
+        type: 'audio',
+        text: undefined,
+        audio: { id: 'AUD_1', mime_type: 'audio/ogg; codecs=opus', voice: true },
+      }),
+    });
+    expect(voice[0]).toMatchObject({ messageType: 'AUDIO', media: { voice: true } });
+  });
+
+  it('média sans identifiant exploitable → media null (jamais un fantôme à télécharger)', () => {
+    const events = provider().parseInboundEvent({
+      body: messageWebhook({ type: 'image', text: undefined, image: { mime_type: 'image/jpeg' } }),
+    });
+    expect(events[0]).toMatchObject({ messageType: 'IMAGE', media: null });
+  });
+
+  it('un média n’est jamais lu depuis le sous-objet d’un AUTRE type', () => {
+    // Type déclaré `image` mais charge utile dans `document` : rien à récupérer.
+    const events = provider().parseInboundEvent({
+      body: messageWebhook({ type: 'image', text: undefined, document: { id: 'DOC_X' } }),
+    });
+    expect(events[0]).toMatchObject({ messageType: 'IMAGE', media: null });
   });
 
   it('type inconnu → UNSUPPORTED (jamais d’exception)', () => {

@@ -5,6 +5,7 @@ import type {
   InboundMessageContentType,
   MarkMessageAsReadInput,
   NormalizedInboundEvent,
+  NormalizedInboundMedia,
   NormalizedInboundStatusEvent,
   ProviderErrorClass,
   RawInboundEvent,
@@ -37,12 +38,32 @@ export interface MetaCloudProviderConfig {
   requestTimeoutMs?: number;
 }
 
+/**
+ * Objet média Meta, commun à image/audio/video/document/sticker. Les champs
+ * varient selon le type (`caption` sur image/video/document, `filename` sur
+ * document, `voice` sur audio) — tout est optionnel et validé défensivement.
+ */
+interface MetaMediaObject {
+  id?: string;
+  mime_type?: string;
+  sha256?: string;
+  file_size?: number;
+  filename?: string;
+  caption?: string;
+  voice?: boolean;
+}
+
 interface MetaMessage {
   from?: string;
   id?: string;
   timestamp?: string;
   type?: string;
   text?: { body?: string };
+  image?: MetaMediaObject;
+  audio?: MetaMediaObject;
+  video?: MetaMediaObject;
+  document?: MetaMediaObject;
+  sticker?: MetaMediaObject;
 }
 
 interface MetaStatus {
@@ -216,6 +237,8 @@ export class MetaCloudWhatsAppProvider implements WhatsAppProvider {
       return null;
     }
     const messageType = META_TYPE_MAP[message.type ?? ''] ?? 'UNSUPPORTED';
+    const mediaObject = this.mediaObjectFor(message);
+    const media = this.parseMedia(mediaObject);
     return {
       kind: 'message',
       // message.id (wamid) est globalement unique chez Meta : dédup directe.
@@ -224,9 +247,60 @@ export class MetaCloudWhatsAppProvider implements WhatsAppProvider {
       from: message.from,
       displayName: contactsByWaId.get(message.from),
       messageType,
-      text: messageType === 'TEXT' ? (message.text?.body ?? '') : null,
+      // Texte du message OU légende du média : dans les deux cas, c'est ce que
+      // le client a écrit.
+      text:
+        messageType === 'TEXT'
+          ? (message.text?.body ?? '')
+          : (this.trimmedOrNull(mediaObject?.caption) ?? null),
+      media,
       providerTimestamp: this.toIso(message.timestamp),
     };
+  }
+
+  /** Sous-objet média correspondant au type déclaré (jamais deviné ailleurs). */
+  private mediaObjectFor(message: MetaMessage): MetaMediaObject | undefined {
+    switch (message.type) {
+      case 'image':
+        return message.image;
+      case 'audio':
+        return message.audio;
+      case 'video':
+        return message.video;
+      case 'document':
+        return message.document;
+      case 'sticker':
+        return message.sticker;
+      default:
+        return undefined;
+    }
+  }
+
+  /**
+   * Normalise un média. Sans `id` exploitable il n'y a RIEN à télécharger :
+   * on renvoie null plutôt qu'un média fantôme que le worker tenterait
+   * indéfiniment de récupérer.
+   */
+  private parseMedia(media: MetaMediaObject | undefined): NormalizedInboundMedia | null {
+    if (!media || typeof media.id !== 'string' || media.id.length === 0) {
+      return null;
+    }
+    return {
+      externalMediaId: media.id,
+      mimeType: this.trimmedOrNull(media.mime_type),
+      fileName: this.trimmedOrNull(media.filename),
+      sizeBytes: typeof media.file_size === 'number' && media.file_size >= 0 ? media.file_size : null,
+      sha256: this.trimmedOrNull(media.sha256),
+      voice: media.voice === true,
+    };
+  }
+
+  private trimmedOrNull(value: string | undefined): string | null {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
   }
 
   private parseStatus(status: MetaStatus): NormalizedInboundStatusEvent | null {

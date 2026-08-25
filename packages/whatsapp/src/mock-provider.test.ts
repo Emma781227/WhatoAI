@@ -53,6 +53,7 @@ describe('MockWhatsAppProvider', () => {
           displayName: 'Alice',
           messageType: 'TEXT',
           text: 'Bonjour',
+          media: null,
           providerTimestamp: '2026-07-17T10:00:00.000Z',
         },
       ]);

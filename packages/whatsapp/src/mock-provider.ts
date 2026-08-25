@@ -32,8 +32,23 @@ export interface MockInboundMessageBody {
   externalMessageId: string;
   from: string;
   displayName?: string;
+  /** Corps du message, ou LÉGENDE quand un média est simulé. */
   text: string;
   timestamp: string;
+  /**
+   * Média SIMULÉ (explicitement factice, comme tout ce provider) : permet
+   * d'exercer la chaîne d'ingestion média sans dépendre de Meta. Le
+   * téléchargement, lui, reste piloté par le stockage mock côté worker.
+   */
+  media?: {
+    type: 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER';
+    externalMediaId: string;
+    mimeType?: string;
+    fileName?: string;
+    sizeBytes?: number;
+    sha256?: string;
+    voice?: boolean;
+  };
 }
 
 export interface MockInboundStatusBody {
@@ -103,9 +118,20 @@ export class MockWhatsAppProvider implements WhatsAppProvider {
           externalMessageId: body.externalMessageId,
           from: body.from,
           displayName: body.displayName,
-          // Le mock ne simule que du texte (aucun média dans cette phase).
-          messageType: 'TEXT',
+          // Texte par défaut ; un média simulé impose son type et garde le
+          // texte fourni comme LÉGENDE (même sémantique que Meta).
+          messageType: body.media?.type ?? 'TEXT',
           text: body.text,
+          media: body.media
+            ? {
+                externalMediaId: body.media.externalMediaId,
+                mimeType: body.media.mimeType ?? null,
+                fileName: body.media.fileName ?? null,
+                sizeBytes: body.media.sizeBytes ?? null,
+                sha256: body.media.sha256 ?? null,
+                voice: body.media.voice === true,
+              }
+            : null,
           providerTimestamp: body.timestamp,
         },
       ];

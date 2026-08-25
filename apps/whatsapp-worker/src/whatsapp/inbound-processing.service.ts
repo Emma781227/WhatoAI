@@ -156,11 +156,22 @@ export class InboundProcessingService {
             contactId: contact.id,
             externalMessageId: event.externalMessageId,
             direction: 'INBOUND',
-            // Vrai type conservé ; textContent uniquement pour TEXT.
+            // Vrai type conservé. `textContent` porte le texte du message OU la
+            // LÉGENDE du média : c'est ce que le client a écrit dans les deux
+            // cas, et c'est ce que l'agent (et l'IA) doivent voir.
             type: MESSAGE_TYPE_MAP[messageType] ?? MessageType.UNSUPPORTED,
             status: 'RECEIVED',
             senderType: 'CUSTOMER',
-            textContent: messageType === 'TEXT' ? event.text : null,
+            textContent: event.text,
+            // Média : l'identifiant fournisseur est enregistré DANS la même
+            // transaction que le message. Le fichier, lui, sera téléchargé
+            // ensuite (jamais avant l'ACK du webhook) — d'où le statut PENDING.
+            externalMediaId: event.media?.externalMediaId ?? null,
+            mediaStatus: event.media ? 'PENDING' : null,
+            mediaMimeType: event.media?.mimeType ?? null,
+            mediaFileName: event.media?.fileName ?? null,
+            mediaSizeBytes: event.media?.sizeBytes ?? null,
+            mediaSha256: event.media?.sha256 ?? null,
           },
           select: { id: true },
         });

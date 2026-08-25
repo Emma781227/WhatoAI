@@ -143,6 +143,9 @@ function inboundWebhook(opts: {
   text?: string;
   type?: string;
   name?: string;
+  caption?: string;
+  mimeType?: string;
+  fileName?: string;
 }): string {
   const type = opts.type ?? 'text';
   const message: Record<string, unknown> = {
@@ -154,7 +157,12 @@ function inboundWebhook(opts: {
   if (type === 'text') {
     message.text = { body: opts.text ?? 'Bonjour' };
   } else {
-    message[type] = { id: `MEDIA_${opts.messageId}` };
+    message[type] = {
+      id: `MEDIA_${opts.messageId}`,
+      ...(opts.mimeType ? { mime_type: opts.mimeType } : {}),
+      ...(opts.fileName ? { filename: opts.fileName } : {}),
+      ...(opts.caption ? { caption: opts.caption } : {}),
+    };
   }
   return JSON.stringify({
     object: 'whatsapp_business_account',
@@ -271,6 +279,21 @@ describe('Meta WhatsApp Cloud (e2e, faux Graph)', () => {
     await app.listen(0);
     prisma = app.get(PrismaService);
     server = app.getHttpServer();
+
+    // Le phone_number_id de test est FIXE : un run interrompu avant son nettoyage
+    // laisse un canal CONNECTED qui porte le même numéro. Le webhook résout le
+    // canal le plus ANCIEN pour un numéro donné — les événements de ce run
+    // partiraient alors vers un canal mort, et tous les scénarios worker
+    // échoueraient en timeout sans erreur visible. On neutralise donc les
+    // canaux résiduels avant de connecter le nôtre (aucune suppression).
+    await prisma.whatsAppChannel.updateMany({
+      where: {
+        provider: 'META_CLOUD',
+        phoneNumberId: PHONE_NUMBER_ID,
+        status: { in: ['CONNECTING', 'CONNECTED', 'SUSPENDED'] },
+      },
+      data: { status: 'DISCONNECTED' },
+    });
 
     // Worker réel : envoi Meta vers le faux Graph, sweep court pour l'orphelin.
     worker = spawn(process.execPath, [WORKER_DIST], {
@@ -415,6 +438,79 @@ describe('Meta WhatsApp Cloud (e2e, faux Graph)', () => {
       );
       expect(message.type).toBe('IMAGE');
       expect(message.textContent).toBeNull();
+    });
+
+    it('média : identifiant fournisseur capturé + statut PENDING (le fichier reste récupérable)', async () => {
+      const raw = inboundWebhook({
+        from: CUSTOMER,
+        messageId: 'wamid.IMG2',
+        type: 'image',
+        mimeType: 'image/jpeg',
+      });
+      await postWebhook(raw, sign(raw)).expect(200);
+      const message = await waitFor(
+        () =>
+          prisma.message.findFirst({
+            where: { channelId, externalMessageId: 'wamid.IMG2' },
+            select: {
+              type: true,
+              externalMediaId: true,
+              mediaStatus: true,
+              mediaMimeType: true,
+              mediaStorageKey: true,
+            },
+          }),
+        'message image avec média',
+      );
+      // Sans cet identifiant, le fichier serait définitivement irrécupérable.
+      expect(message.externalMediaId).toBe('MEDIA_wamid.IMG2');
+      expect(message.mediaMimeType).toBe('image/jpeg');
+      // Le téléchargement est ASYNCHRONE : rien n'est stocké à l'ingestion.
+      expect(message.mediaStatus).toBe('PENDING');
+      expect(message.mediaStorageKey).toBeNull();
+    });
+
+    it('média légendé : la légende devient le texte du message (question du client conservée)', async () => {
+      const raw = inboundWebhook({
+        from: CUSTOMER,
+        messageId: 'wamid.IMG3',
+        type: 'image',
+        caption: 'Vous avez ça en 42 ?',
+      });
+      await postWebhook(raw, sign(raw)).expect(200);
+      const message = await waitFor(
+        () =>
+          prisma.message.findFirst({
+            where: { channelId, externalMessageId: 'wamid.IMG3' },
+            select: { type: true, textContent: true, externalMediaId: true },
+          }),
+        'message image légendé',
+      );
+      expect(message.type).toBe('IMAGE');
+      expect(message.textContent).toBe('Vous avez ça en 42 ?');
+      expect(message.externalMediaId).toBe('MEDIA_wamid.IMG3');
+    });
+
+    it('document : nom de fichier conservé pour l’affichage et le téléchargement', async () => {
+      const raw = inboundWebhook({
+        from: CUSTOMER,
+        messageId: 'wamid.DOC1',
+        type: 'document',
+        mimeType: 'application/pdf',
+        fileName: 'bon-de-commande.pdf',
+      });
+      await postWebhook(raw, sign(raw)).expect(200);
+      const message = await waitFor(
+        () =>
+          prisma.message.findFirst({
+            where: { channelId, externalMessageId: 'wamid.DOC1' },
+            select: { type: true, mediaFileName: true, mediaStatus: true },
+          }),
+        'message document',
+      );
+      expect(message.type).toBe('DOCUMENT');
+      expect(message.mediaFileName).toBe('bon-de-commande.pdf');
+      expect(message.mediaStatus).toBe('PENDING');
     });
 
     it('phone_number_id inconnu + signature valide → ACK 200, AUCUNE écriture métier', async () => {

@@ -38,6 +38,14 @@ export class DevWhatsAppMockController {
       displayName: dto.displayName,
       text: dto.text,
       timestamp: new Date().toISOString(),
+      media: dto.mediaType
+        ? {
+            type: dto.mediaType,
+            externalMediaId: dto.mediaId ?? `mock-media-${externalMessageId}`,
+            mimeType: dto.mediaMimeType,
+            fileName: dto.mediaFileName,
+          }
+        : undefined,
     };
     return this.ingestion.ingest(dto.channelId, { body });
   }

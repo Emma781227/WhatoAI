@@ -47,6 +47,31 @@ export interface RawInboundEvent {
 }
 
 /** Message client entrant, normalisé — format interne unique de la pipeline. */
+/**
+ * Média porté par un message entrant, tel que DÉCLARÉ par le fournisseur.
+ *
+ * ⚠️ `externalMediaId` est la seule prise sur le fichier : Meta ne conserve le
+ * binaire que quelques semaines et ne fournit aucun autre moyen de le retrouver.
+ * Le perdre à l'ingestion, c'est le perdre DÉFINITIVEMENT — d'où sa capture
+ * dès le contrat normalisé, avant toute décision de téléchargement.
+ *
+ * Aucune URL n'est transportée ici : celle de Meta est temporaire et exige le
+ * token du tenant, elle n'a donc de sens qu'au moment du téléchargement.
+ */
+export interface NormalizedInboundMedia {
+  externalMediaId: string;
+  /** Type MIME annoncé (jamais une autorité : re-vérifié au téléchargement). */
+  mimeType: string | null;
+  /** Nom d'origine — fourni pour les documents uniquement, en pratique. */
+  fileName: string | null;
+  /** Taille annoncée en octets, si le fournisseur la donne. */
+  sizeBytes: number | null;
+  /** Empreinte fournie par le fournisseur, conservée telle quelle. */
+  sha256: string | null;
+  /** Note vocale (audio enregistré) plutôt qu'un fichier audio joint. */
+  voice: boolean;
+}
+
 export interface NormalizedInboundMessageEvent {
   kind: 'message';
   /** Identifiant d'événement pour l'idempotence de la durable inbox. */
@@ -56,8 +81,14 @@ export interface NormalizedInboundMessageEvent {
   from: string;
   displayName?: string;
   messageType: InboundMessageContentType;
-  /** Contenu texte — présent seulement pour TEXT ; null pour les médias. */
+  /**
+   * Texte écrit par le client : corps d'un message TEXT, ou LÉGENDE d'un média.
+   * Une photo légendée « vous avez ça en 42 ? » porte une vraie question — la
+   * jeter reviendrait à ignorer le message.
+   */
   text: string | null;
+  /** Média joint, si le message en porte un. */
+  media?: NormalizedInboundMedia | null;
   /** Timestamp FOURNISSEUR (ISO 8601) — base du calcul de la fenêtre 24 h. */
   providerTimestamp: string;
 }

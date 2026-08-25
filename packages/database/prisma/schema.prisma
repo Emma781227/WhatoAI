@@ -310,6 +310,21 @@ enum MessageDirection {
   INTERNAL
 }
 
+// Cycle de vie du fichier d'un média ENTRANT. Distinct du statut du message :
+// un message média est RECEIVED (donc affiché dans le fil) même si son fichier
+// n'est pas encore téléchargé — l'agent voit tout de suite qu'une photo est
+// arrivée, puis elle apparaît.
+//
+// SKIPPED = volontairement non téléchargé (type hors liste blanche ou taille
+// au-dessus du plafond) — un refus assumé, jamais confondu avec un échec.
+enum MessageMediaStatus {
+  PENDING
+  DOWNLOADING
+  STORED
+  FAILED
+  SKIPPED
+}
+
 enum MessageType {
   TEXT
   IMAGE
@@ -924,9 +939,27 @@ model Message {
   senderType        MessageSenderType
   senderUserId      String?
   textContent       String?
+  // ⚠️ `mediaUrl` n'accueille JAMAIS l'URL renvoyée par Meta : celle-ci est
+  // temporaire et exige le token du tenant. Elle est réservée aux médias
+  // SORTANTS fournis par une URL publique. Un média entrant est servi par
+  // l'API depuis `mediaStorageKey`, jamais par un lien fournisseur.
   mediaUrl          String?
   mediaMimeType     String?
   mediaFileName     String?
+  // --- Médias ENTRANTS -----------------------------------------------------
+  // `externalMediaId` est la SEULE prise sur le fichier chez le fournisseur
+  // (rétention de quelques semaines) : il est capturé à l'ingestion, avant
+  // toute tentative de téléchargement, sinon le média est perdu à jamais.
+  externalMediaId   String?
+  mediaStatus       MessageMediaStatus?
+  /// Clé opaque dans le stockage objet — jamais exposée au client.
+  mediaStorageKey   String?
+  mediaSizeBytes    Int?
+  mediaSha256       String?
+  mediaAttemptCount Int                 @default(0)
+  mediaLastAttemptAt DateTime?
+  /// Code d'échec FILTRÉ (jamais de réponse fournisseur ni de token).
+  mediaErrorCode    String?
   quotedMessageId   String?
   providerPayload   Json?
   errorCode         String?
@@ -980,6 +1013,9 @@ model Message {
   @@unique([conversationId, clientMessageId])
   @@index([conversationId, createdAt])
   @@index([organizationId, shopId])
+  // Reprise des téléchargements de médias (sweep worker) : cible les seuls
+  // messages en attente ou en échec, sans balayer toute la table.
+  @@index([mediaStatus, mediaLastAttemptAt])
   @@map("messages")
 }
 

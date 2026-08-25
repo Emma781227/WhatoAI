@@ -31,6 +31,33 @@ export class MockInboundDto {
   @IsString()
   @MaxLength(128)
   externalMessageId?: string;
+
+  /**
+   * Simule un média entrant : `text` devient alors la LÉGENDE. Le fichier
+   * lui-même est servi par le stockage mock du worker — aucun appel réseau.
+   */
+  @ApiPropertyOptional({ enum: ['IMAGE', 'AUDIO', 'VIDEO', 'DOCUMENT', 'STICKER'] })
+  @IsOptional()
+  @IsIn(['IMAGE', 'AUDIO', 'VIDEO', 'DOCUMENT', 'STICKER'])
+  mediaType?: 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER';
+
+  @ApiPropertyOptional({ description: 'Identifiant de média simulé (défaut : généré).' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  mediaId?: string;
+
+  @ApiPropertyOptional({ example: 'image/jpeg' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  mediaMimeType?: string;
+
+  @ApiPropertyOptional({ example: 'bon-de-commande.pdf' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  mediaFileName?: string;
 }
 
 export class MockStatusDto {
